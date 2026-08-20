@@ -24,6 +24,7 @@ import { stdin, stdout } from 'node:process';
 
 import { lerEnv, gravarEnv, cor } from './env.mjs';
 import { garantirCloudflared } from './cloudflared.mjs';
+import { PORTA_PADRAO } from '../shared/porta.js';
 
 const CASA = path.join(os.homedir(), '.cloudflared');
 const CERT = path.join(CASA, 'cert.pem');
@@ -181,7 +182,7 @@ if (!fs.existsSync(credenciais)) {
 
 // ---------------------------------------------------------------- arquivos
 
-const porta = lerEnv().PORT || '3001';
+const porta = lerEnv().PORT || PORTA_PADRAO;
 const configPath = path.join(CASA, `${nome}.yml`);
 
 // Regra catch-all obrigatória no fim: sem ela o cloudflared recusa a subir.

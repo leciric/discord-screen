@@ -8,7 +8,7 @@
          dos cabeçalhos no-store guardou a versão antiga por heurística do
          navegador, e continuaria usando ela para sempre. Trocar a query força
          uma URL nova. Incremente ao publicar mudanças nesses arquivos. -->
-    <link rel="stylesheet" href="/share.css?v=9" />
+    <link rel="stylesheet" href="/share.css?v=11" />
   </head>
   <body>
     <main class="card">
@@ -54,13 +54,29 @@
 
       <section id="live" hidden>
         <div class="live-badge"><span class="dot"></span> No ar</div>
-        <video id="preview" muted playsinline></video>
+        <!-- O canvas por cima é onde chegam o laser e o desenho de quem está
+             assistindo. Fica aqui para quem mostra a tela ver o que estão
+             apontando sem precisar voltar para o Discord. -->
+        <div class="preview-wrap">
+          <video id="preview" muted playsinline></video>
+          <canvas id="previewAnn"></canvas>
+          <p id="annLine" class="ann-line" hidden></p>
+        </div>
         <div class="stats">
           <div><strong id="viewers">0</strong><span>assistindo</span></div>
           <div><strong id="fpsOut">—</strong><span>quadros</span></div>
           <div><strong id="bitrate">—</strong><span>enviando</span></div>
           <div><strong id="elapsed">00:00</strong><span>no ar</span></div>
         </div>
+        <button id="flutuar" class="secondary" hidden>
+          Ver por cima de tudo
+        </button>
+        <p id="flutuarNota" class="note-min" hidden>
+          Abre uma janelinha do sistema que fica acima dos outros programas, com
+          a sua tela e o que estiverem marcando nela. Compartilhando a tela
+          inteira, ela aparece dentro de si mesma — compartilhando uma janela
+          só, não.
+        </p>
         <button id="somAba" class="secondary" hidden>Som de uma aba</button>
         <button id="stop" class="danger">Parar de transmitir</button>
       </section>
@@ -72,6 +88,6 @@
       </footer>
     </main>
 
-    <script type="module" src="/share.js?v=10"></script>
+    <script type="module" src="/share.js?v=14"></script>
   </body>
 </html>

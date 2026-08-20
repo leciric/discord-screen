@@ -31,6 +31,25 @@ const MAX_ROOM_NAME = 40;
 const EMPTY_GRACE_MS = 12 * 1000;
 const SWEEP_EVERY_MS = 4 * 1000;
 
+/**
+ * Quanto tempo uma transmissão sobrevive sem o dono na sala.
+ *
+ * A captura roda numa aba do navegador com conexão própria, que não sabe nada
+ * do Discord: fechar a atividade, sair da call ou fechar o Discord inteiro não
+ * chega até ela, e a tela continuava indo para uma sala que a pessoa já tinha
+ * deixado. Quem percebe é o servidor, que vê o socket da atividade cair e
+ * ninguém daquele dono voltar.
+ *
+ * A carência existe pelo mesmo motivo da EMPTY_GRACE_MS: recarregar a atividade
+ * desconecta e reconecta, e sem ela um F5 derrubaria a transmissão. Quinze
+ * segundos cobrem com folga o relogin do Discord, que o próprio arranque já
+ * considera demorado a partir de oito.
+ *
+ * A variável de ambiente existe para o teste não ficar quinze segundos parado.
+ * Em uso normal ninguém mexe nisto.
+ */
+const ORFAO_GRACE_MS = Number(process.env.BROADCAST_ORPHAN_MS) || 15 * 1000;
+
 // Freio de força bruta: sem isso uma senha curta cai em segundos, porque o
 // endpoint responde tão rápido quanto a rede permite.
 const MAX_ATTEMPTS = 5;
@@ -41,6 +60,29 @@ const SLOT_BYTE = 0;
 const TYPE_BYTE = 1;
 const KEYFRAME = 1;
 const AUDIO = 3;
+
+// ------------------------------------------------------------- anotações
+//
+// O servidor guarda os traços porque quem chega no meio precisa vê-los: o
+// desenho é estado da transmissão, não um evento que passou. O laser não é
+// guardado — ele se refaz sozinho no quadro seguinte.
+//
+// Todos os tetos existem pelo mesmo motivo do MAX_BUFFERED_BYTES: um cliente
+// adulterado desenhando em laço encheria a RAM do processo e o JSON de sincronia
+// de quem entrasse depois.
+const MAX_TRACOS = 400;
+const MAX_PONTOS_POR_TRACO = 3000;
+const MAX_PONTOS_TOTAL = 24_000;
+const MAX_PONTOS_POR_MSG = 64;
+
+// Teto de eventos por segundo, por conexão. Laser a 25/s somado a uma caneta a
+// 25/s dá 50 — 200 deixa folga de sobra para quem tem a mão rápida e ainda
+// assim corta um laço.
+const MAX_EVENTOS_POR_S = 200;
+
+const EVENTOS = new Set(['p', 'po', 's', 'a', 'e', 'u', 'c', 'ca']);
+const COR_VALIDA = /^#[0-9a-f]{6}$/i;
+const GRADE = 4095;
 
 const rooms = new Map();
 
@@ -312,6 +354,8 @@ function countPeople(room) {
 const sweeper = setInterval(() => {
   const now = Date.now();
   for (const room of rooms.values()) {
+    encerrarOrfaos(room, now);
+
     const empty = room.viewers.size === 0 && room.broadcasters.size === 0;
 
     if (!empty) {
@@ -329,6 +373,59 @@ const sweeper = setInterval(() => {
   }
 }, SWEEP_EVERY_MS);
 sweeper.unref?.();
+
+/**
+ * Encerra a transmissão de quem não está mais na sala.
+ *
+ * "Estar na sala" é ter pelo menos uma conexão de espectador — é ela que a
+ * atividade abre, e é ela que morre quando a pessoa fecha a atividade, sai do
+ * canal de voz ou fecha o Discord. A aba de captura sozinha não conta: ela é
+ * uma janela do navegador que não faz ideia de nada disso, e era exatamente por
+ * isso que a tela continuava no ar.
+ *
+ * Fechar o socket não é rispidez: a mensagem é o caminho educado, mas uma aba
+ * em segundo plano pode demorar a reagir a ela, e o fechamento derruba a
+ * captura pelo tratamento de queda que o transmissor já tem. Entre insistir e
+ * deixar a tela de alguém exposta, fecha-se.
+ */
+function encerrarOrfaos(room, now) {
+  marcarOrfaos(room, now);
+
+  // Cópia da lista: encerrar tira o transmissor do registro, e não se altera o
+  // que se está percorrendo.
+  for (const entry of [...room.broadcasters.values()]) {
+    if (!entry.orfaoDesde || now - entry.orfaoDesde < ORFAO_GRACE_MS) continue;
+
+    console.log(`[room ${room.id}] transmissao de ${entry.info.name} encerrada: saiu da sala`);
+    sendJson(entry.ws, {
+      type: 'stop-request',
+      reason: 'Você saiu da sala, então a transmissão foi encerrada. A captura parou.',
+    });
+    // Antes de fechar: sai do registro na hora, senão a próxima passada da
+    // varredura o encontraria de novo enquanto o socket ainda se despede.
+    detachBroadcaster(room, entry.ws);
+    entry.ws.close();
+  }
+}
+
+/**
+ * Marca desde quando cada transmissão está sem o dono na sala.
+ *
+ * Chamada quando uma conexão cai e quando outra entra, além da varredura: o
+ * relógio precisa começar no instante em que a pessoa sai, não na próxima
+ * passada. São quatro segundos de diferença, e eles são de tela exposta.
+ */
+function marcarOrfaos(room, now = Date.now()) {
+  if (!room.broadcasters.size) return;
+
+  const presentes = new Set();
+  for (const v of room.viewers) if (v.__info) presentes.add(v.__info.id);
+
+  for (const entry of room.broadcasters.values()) {
+    if (presentes.has(entry.info.id)) entry.orfaoDesde = null;
+    else if (!entry.orfaoDesde) entry.orfaoDesde = now;
+  }
+}
 
 // -------------------------------------------------------------------- envio
 
@@ -456,6 +553,9 @@ export function attachBroadcaster(room, ws, info) {
     startedAt: null,
     traffic: trafficCounter(),
     droppedChunks: 0,
+    ann: novaAnn(),
+    // Desde quando não há ninguém deste dono na sala. Ver encerrarOrfaos.
+    orfaoDesde: null,
   };
   room.broadcasters.set(info.id, entry);
   room.slots.set(slot, entry);
@@ -472,6 +572,9 @@ export function startStream(room, entry) {
   entry.startedAt = Date.now();
   entry.config = null;
   entry.audioConfig = null;
+  // Tela nova, quadro limpo: traço feito sobre a tela anterior não tem mais
+  // sobre o que estar.
+  entry.ann = novaAnn();
   // Transmissão nova recomeça do zero: ninguém assiste até pedir.
   for (const v of room.viewers) {
     v.__primed?.delete(entry.slot);
@@ -582,6 +685,7 @@ export function stopStream(room, entry) {
   entry.startedAt = null;
   entry.config = null;
   entry.audioConfig = null;
+  entry.ann = novaAnn();
   for (const v of room.viewers) {
     v.__primed?.delete(entry.slot);
     v.__watching?.delete(entry.slot);
@@ -619,6 +723,11 @@ export function watch(room, ws, slot) {
   if (entry.audioConfig) {
     sendJson(ws, { type: 'audio-config', slot, config: entry.audioConfig });
   }
+  // O que já está desenhado é estado da tela, não histórico: quem chega no meio
+  // precisa ver a mesma seta que todo mundo está olhando.
+  if (entry.ann.tracos.size) {
+    sendJson(ws, { type: 'ann-sync', slot, tracos: snapshotAnn(entry) });
+  }
   requestKeyframe(entry);
   broadcastState(room);
 }
@@ -630,6 +739,239 @@ export function unwatch(room, ws, slot) {
   broadcastState(room);
 }
 
+// -------------------------------------------------------------- anotações
+
+function novaAnn() {
+  // Ordem de inserção é o que "desfazer" usa; Map garante isso por
+  // especificação, então não há índice separado para manter em dia.
+  return { tracos: new Map(), pontos: 0 };
+}
+
+/** Estado desenhado, no formato que a camada do cliente consome direto. */
+function snapshotAnn(entry) {
+  return [...entry.ann.tracos.entries()].map(([id, t]) => ({
+    id,
+    uid: t.uid,
+    name: t.name,
+    color: t.color,
+    width: t.width,
+    pts: t.pts,
+  }));
+}
+
+/**
+ * Freio por conexão.
+ *
+ * Janela de um segundo, contador simples: não precisa ser justo, precisa ser
+ * barato. O que ele impede é um cliente adulterado transformar cada evento seu
+ * em N cópias saindo do relay.
+ */
+function permitirEvento(ws) {
+  const segundo = Math.floor(Date.now() / 1000);
+  if (ws.__annSegundo !== segundo) {
+    ws.__annSegundo = segundo;
+    ws.__annContagem = 0;
+  }
+  ws.__annContagem = (ws.__annContagem ?? 0) + 1;
+  return ws.__annContagem <= MAX_EVENTOS_POR_S;
+}
+
+const inteiroNaGrade = (n) => Number.isFinite(n) && n >= 0 && n <= GRADE;
+
+/** Devolve o evento saneado, ou null quando não dá para confiar nele. */
+function validarEvento(ev) {
+  if (!ev || typeof ev !== 'object' || !EVENTOS.has(ev.k)) return null;
+
+  switch (ev.k) {
+    case 'p': {
+      const x = Math.round(ev.x);
+      const y = Math.round(ev.y);
+      if (!inteiroNaGrade(x) || !inteiroNaGrade(y)) return null;
+      const c = COR_VALIDA.test(ev.c ?? '') ? ev.c : '#ff4d4f';
+      return { k: 'p', x, y, c };
+    }
+    case 'po':
+    case 'u':
+    case 'c':
+    case 'ca':
+      return { k: ev.k };
+    case 's': {
+      const pts = validarPontos(ev.pts);
+      if (!pts || !Number.isInteger(ev.id) || ev.id < 0 || ev.id > 1e9) return null;
+      return {
+        k: 's',
+        id: ev.id,
+        c: COR_VALIDA.test(ev.c ?? '') ? ev.c : '#ff4d4f',
+        w: Math.min(64, Math.max(1, Math.round(ev.w) || 10)),
+        pts,
+      };
+    }
+    case 'a': {
+      const pts = validarPontos(ev.pts);
+      if (!pts || !pts.length || !Number.isInteger(ev.id)) return null;
+      return { k: 'a', id: ev.id, pts };
+    }
+    case 'e':
+      return Number.isInteger(ev.id) ? { k: 'e', id: ev.id } : null;
+    default:
+      return null;
+  }
+}
+
+/** Pares x,y achatados num vetor só. Ímpar significa pacote quebrado. */
+function validarPontos(pts) {
+  if (!Array.isArray(pts) || pts.length % 2 !== 0) return null;
+  if (pts.length > MAX_PONTOS_POR_MSG * 2) return null;
+
+  const saida = new Array(pts.length);
+  for (let i = 0; i < pts.length; i++) {
+    const n = Math.round(pts[i]);
+    if (!inteiroNaGrade(n)) return null;
+    saida[i] = n;
+  }
+  return saida;
+}
+
+/** Limpar a tela dos outros é do dono da transmissão e de quem criou a sala. */
+function podeLimparTudo(room, entry, userId) {
+  return entry.info.id === userId || room.ownerId === userId;
+}
+
+/**
+ * Aplica o evento ao estado guardado.
+ *
+ * @returns {boolean} se ele deve ser repassado. Evento recusado por teto não
+ * sai daqui: repassar o que o servidor não guardou deixaria quem já está na
+ * sala com um traço que ninguém mais vai receber ao entrar.
+ */
+function registrarAnn(entry, info, ev) {
+  const ann = entry.ann;
+  const chave = `${info.id}:${ev.id}`;
+
+  switch (ev.k) {
+    // Laser não é guardado: ele se refaz sozinho no quadro seguinte.
+    case 'p':
+    case 'po':
+    case 'e':
+      return true;
+
+    case 's': {
+      if (ann.pontos + ev.pts.length / 2 > MAX_PONTOS_TOTAL) return false;
+      ann.tracos.set(chave, {
+        uid: info.id,
+        name: info.name,
+        color: ev.c,
+        width: ev.w,
+        pts: [...ev.pts],
+      });
+      ann.pontos += ev.pts.length / 2;
+      podarTracos(ann);
+      return true;
+    }
+
+    case 'a': {
+      const traco = ann.tracos.get(chave);
+      if (!traco) return false;
+      if (traco.pts.length / 2 >= MAX_PONTOS_POR_TRACO) return false;
+      if (ann.pontos + ev.pts.length / 2 > MAX_PONTOS_TOTAL) return false;
+      traco.pts.push(...ev.pts);
+      ann.pontos += ev.pts.length / 2;
+      return true;
+    }
+
+    case 'u': {
+      const ultimo = [...ann.tracos.entries()].filter(([, t]) => t.uid === info.id).pop();
+      if (!ultimo) return false;
+      ann.pontos -= ultimo[1].pts.length / 2;
+      ann.tracos.delete(ultimo[0]);
+      return true;
+    }
+
+    case 'c': {
+      let mexeu = false;
+      for (const [id, t] of ann.tracos) {
+        if (t.uid !== info.id) continue;
+        ann.pontos -= t.pts.length / 2;
+        ann.tracos.delete(id);
+        mexeu = true;
+      }
+      return mexeu;
+    }
+
+    case 'ca':
+      entry.ann = novaAnn();
+      return true;
+
+    default:
+      return false;
+  }
+}
+
+function podarTracos(ann) {
+  while (ann.tracos.size > MAX_TRACOS) {
+    const [id, t] = ann.tracos.entries().next().value;
+    ann.pontos -= t.pts.length / 2;
+    ann.tracos.delete(id);
+  }
+}
+
+/**
+ * Recebe uma anotação de um espectador e a repassa para a tela inteira.
+ *
+ * Vai também para o transmissor: é isso que fecha o laço da conversa — a
+ * página de captura desenha por cima do próprio preview, então quem mostra a
+ * tela vê a seta sem precisar voltar para o Discord.
+ */
+export function pushAnn(room, ws, slot, evBruto) {
+  const info = ws.__info;
+  if (!info) return;
+
+  const entry = room.slots.get(slot);
+  if (!entry?.streaming) return;
+
+  // Desenhar numa tela que não se está assistindo é desenhar no escuro: a
+  // posição normalizada não teria sobre o que ter sido escolhida.
+  //
+  // Menos para quem transmite aquela tela. Ele vê a imagem sem assistir a
+  // própria transmissão — a captura já está na máquina dele —, e é justamente
+  // ele quem mais precisa apontar: "esse botão aqui", enquanto mostra.
+  if (!ws.__watching?.has(slot) && entry.info.id !== info.id) return;
+  if (!permitirEvento(ws)) return;
+
+  const ev = validarEvento(evBruto);
+  if (!ev) return;
+  if (ev.k === 'ca' && !podeLimparTudo(room, entry, info.id)) return;
+
+  if (!registrarAnn(entry, info, ev)) {
+    avisarQuadroCheio(ws, entry, ev);
+    return;
+  }
+
+  const msg = JSON.stringify({ type: 'ann', slot, uid: info.id, name: info.name, ev });
+  for (const v of room.viewers) {
+    if (v.__watching?.has(slot)) send(v, msg);
+  }
+  send(entry.ws, msg);
+}
+
+/**
+ * Traço recusado por teto some da tela de quem desenhou sem explicação nenhuma.
+ * O aviso é limitado a um a cada cinco segundos porque a recusa se repete a
+ * cada movimento do mouse.
+ */
+function avisarQuadroCheio(ws, entry, ev) {
+  if (ev.k !== 's' && ev.k !== 'a') return;
+  if (entry.ann.pontos < MAX_PONTOS_TOTAL * 0.9) return;
+
+  const agora = Date.now();
+  if (agora - (ws.__annAviso ?? 0) < 5000) return;
+  ws.__annAviso = agora;
+  sendJson(ws, {
+    type: 'error',
+    message: 'O quadro de desenhos está cheio. Apague algo para continuar desenhando.',
+  });
+}
+
 export function attachViewer(room, ws, info) {
   ws.__primed = new Set();
   ws.__watching = new Set();
@@ -638,6 +980,9 @@ export function attachViewer(room, ws, info) {
   ws.__mediaBytesOut = ws.__mediaBytesOut ?? 0;
   room.viewers.add(ws);
   room.emptySince = null;
+  // Quem voltou zera o relógio do órfão na hora — é o que faz um F5 na
+  // atividade não custar a transmissão.
+  marcarOrfaos(room);
 
   sendJson(ws, roomState(room));
 
@@ -652,6 +997,8 @@ export function attachViewer(room, ws, info) {
 
 export function detachViewer(room, ws) {
   room.viewers.delete(ws);
+  // Saiu agora: o relógio começa agora. Ver marcarOrfaos.
+  marcarOrfaos(room);
   broadcastState(room);
 }
 

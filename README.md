@@ -52,7 +52,7 @@ Para desligar, aperte `Ctrl + C` na janela preta. Isso derruba tudo junto.
 ### Só quero testar no navegador
 
 Se ele perguntar como você quer usar, escolha a opção **sem Discord**. Aí é só
-abrir <http://localhost:3001> em duas janelas, criar uma sala numa, entrar pela
+abrir <http://localhost:31415> em duas janelas, criar uma sala numa, entrar pela
 outra e clicar em **Compartilhar tela** — você vê sua própria tela chegando do
 outro lado.
 
@@ -99,8 +99,13 @@ O painel mostra em tempo real pessoas e servidores conectados, salas,
 transmissões, banda usada pelo relay, ping, descartes, CPU, memória, disco e
 informações do processo/container.
 
-Ative o modo de desenvolvedor no Discord, clique com o botão direito na sua
-conta e use **Copiar ID do usuário**. Depois acrescente ao `.env`:
+Para ligar, rode `npm run configurar` e responda a pergunta **"Seu ID do
+Discord"**, no passo 1. Um traço (`-`) desliga o painel de novo.
+
+O que ele pede é o ID da **sua conta**, não o Client ID da aplicação — os dois
+são números parecidos. Ative o modo de desenvolvedor no Discord (Configurações →
+Avançado), clique com o botão direito na sua conta e use **Copiar ID do
+usuário**. Se preferir editar à mão, é esta linha no `.env`:
 
 ```env
 DISCORD_ADMIN_ID=123456789012345678
@@ -118,6 +123,79 @@ contadores globais de rede da máquina ficam indisponíveis.
 
 O nome de um servidor é resolvido com o Bot Token. Quando o bot não estiver
 naquele servidor, o painel mostra o Guild ID sem impedir as outras métricas.
+
+---
+
+## Apontar, desenhar e dar zoom na tela
+
+Quem assiste não fica só olhando. Passando o mouse sobre a tela em destaque
+aparece uma barrinha no alto, com o que dá para fazer:
+
+| Ferramenta | Atalho | O que faz |
+|---|---|---|
+| **Mover** | `V` | Arrasta a imagem depois de ampliada. |
+| **Laser** | `L` | Um ponto luminoso com o seu nome, que todo mundo vê seguir o seu mouse. Some sozinho quando você para. |
+| **Desenhar** | `C` | Risca por cima da tela. O traço fica lá até alguém apagar. |
+
+E ao lado: o **olho** (`O`), que esconde todos os desenhos — **só para você**,
+para dar uma olhada limpa no que está embaixo; ninguém mais perde nada, e o que
+desenharem enquanto estiver escondido aparece quando você abrir o olho de novo.
+Depois: desfazer o seu último traço (`Ctrl+Z`), apagar tudo o que **você**
+desenhou, mandar a tela para uma janela flutuante (logo abaixo), e o zoom —
+`+`, `−` e `0` para voltar ao normal.
+
+**Zoom** também pela roda do mouse (ou dois dedos, no touch). Ele aproxima onde
+o cursor está, não o centro. Duplo clique volta ao tamanho normal.
+
+O zoom é **só seu**: ampliar aqui não mexe na tela de mais ninguém. Já o laser e
+o desenho são de todo mundo.
+
+### E quem está mostrando a tela?
+
+Vê tudo, e também desenha. A tela dele aparece no palco assim que ele começa a
+transmitir, sem precisar pedir para assistir — a imagem vem direto da captura,
+não pela internet, então não gasta banda nem chega atrasada. As marcações dos
+outros aparecem por cima dela, e a mesma barra de ferramentas está lá para ele
+responder: circular, apontar, apagar.
+
+Quando a captura roda numa aba separada (que é o caminho quando o Discord não
+deixa capturar dentro da atividade), as marcações também aparecem sobre o vídeo
+daquela aba, com uma linha dizendo quem está marcando.
+
+### Ver as marcações sem voltar para o Discord
+
+O caso real: você está compartilhando, alguém circula uma linha do seu código, e
+você está no editor — com o Discord atrás de tudo.
+
+Para isso existe o botão **"Manter numa janela por cima de tudo"**, na barra da
+tela (e **"Ver por cima de tudo"**, na aba de captura). Ele abre uma janelinha
+do próprio sistema, daquelas de vídeo flutuante, que **fica acima dos outros
+programas**: a sua tela dentro dela, e o que estiverem desenhando por cima. Você
+continua trabalhando e vê a seta aparecer no canto.
+
+Dá para arrastar e redimensionar a janela como qualquer outra, e o mesmo botão a
+fecha.
+
+> **O que não dá:** desenhar direto no seu desktop, por cima dos programas de
+> verdade. Nenhuma página da web consegue pintar fora da própria janela — é uma
+> trava do navegador, não uma escolha deste programa. Só um aplicativo instalado
+> faria isso, e a janela flutuante é o mais perto que se chega sem instalar
+> nada.
+
+> Compartilhando a **tela inteira**, a janela flutuante faz parte da tela e
+> aparece dentro de si mesma, em miniatura. Compartilhando **uma janela só**,
+> isso não acontece.
+
+> O botão só aparece onde o navegador oferece o recurso. Dentro do Discord a
+> permissão depende do cliente; se ele não estiver lá, a aba de captura tem o
+> mesmo botão.
+
+Quem chega no meio encontra o que já está desenhado. Quem está mostrando a tela,
+e quem criou a sala, ganham um botão a mais na barra: **limpar os desenhos de
+todo mundo**. Trocar a tela compartilhada também limpa.
+
+> Numa janela bem estreita a barra encolhe e a paleta de cores sai de cena — a
+> cor que estava escolhida continua valendo.
 
 ---
 
@@ -161,12 +239,20 @@ O endereço público mudou. Vá no site do Discord em **Activities → URL Mappi
 e troque o *Target* pelo endereço que aparece na janela preta. Para isso não
 acontecer nunca mais, rode `npm run tunel:criar`.
 
-**"A porta 3001 já está sendo usada"**
+**"A porta 31415 já está sendo usada"**
 Tem outra janela do programa aberta. Feche a outra e tente de novo.
 
 **O botão de compartilhar abre uma aba e não acontece nada**
 Essa aba precisa continuar aberta enquanto você transmite. Pode voltar para o
 Discord normalmente, só não feche a aba.
+
+**A transmissão parou sozinha dizendo que eu "saí da sala"**
+Você fechou a atividade, saiu do canal de voz ou perdeu a conexão com o Discord.
+A aba de captura é uma janela comum do navegador e não fica sabendo de nada
+disso sozinha — antes, ela continuava mandando a sua tela para uma sala que você
+já tinha deixado. Agora o servidor percebe e encerra a captura por você, uns
+quinze segundos depois. Recarregar a atividade não conta: esses segundos existem
+justamente para um F5 não custar a transmissão.
 
 **"npm não é reconhecido como um comando"**
 O Node.js não foi instalado, ou a janela preta foi aberta antes da instalação.

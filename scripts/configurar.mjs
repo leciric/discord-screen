@@ -16,6 +16,7 @@ import crypto from 'node:crypto';
 
 import { lerEnv, gravarEnv, cor } from './env.mjs';
 import { garantirEntryPoint, contarEntryPoint } from './entry-point.mjs';
+import { PORTA_PADRAO } from '../shared/porta.js';
 
 const linha = (texto = '') => console.log(texto);
 const titulo = (texto) => linha(`\n${cor.forte}${texto}${cor.fim}`);
@@ -65,7 +66,7 @@ const modo = await perguntar('Escolha (1 ou 2)', {
 // O segredo é aleatório e ninguém precisa vê-lo: pedir isso a uma pessoa só
 // produz segredos ruins. Um já existente é preservado, senão todo mundo que
 // estava numa sala seria desconectado a cada reconfiguração.
-const SESSION_SECRET = atual.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+let SESSION_SECRET = atual.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
 
 if (modo === '1') {
   gravarEnv({ SESSION_SECRET, DISCORD_CLIENT_ID: '', DISCORD_CLIENT_SECRET: '' });
@@ -73,7 +74,9 @@ if (modo === '1') {
   titulo(`  ${cor.verde}Pronto.${cor.fim}`);
   linha();
   linha(`  Agora rode:   ${cor.forte}npm start${cor.fim}`);
-  linha(`  E abra:       ${cor.forte}http://localhost:3001${cor.fim}`);
+  // A porta do .env, não a padrão: quem já trocou PORT receberia aqui um
+  // endereço que não abre, e sem nenhuma pista de por quê.
+  linha(`  E abra:       ${cor.forte}http://localhost:${atual.PORT || PORTA_PADRAO}${cor.fim}`);
   linha();
   nota('  Dica: abra em duas janelas do navegador. Compartilhe a tela numa');
   nota('  e assista pela outra — dá para ver tudo funcionando sozinho.');
@@ -128,6 +131,52 @@ const DISCORD_BOT_TOKEN = await perguntar('Token do bot (opcional)', {
       : 'Curto demais para um token de bot; isso parece o Client Secret. Cole o token ou aperte Enter para pular.',
 });
 
+// Mesma história do token do bot: a chave existia na lista do env.mjs, o
+// servidor sabia lê-la, o README ensinava a escrevê-la à mão — e nenhum comando
+// perguntava. Painel que só liga editando arquivo é painel que quase ninguém
+// liga.
+linha();
+nota('  Opcional: o painel administrativo. Ele mostra em tempo real quem está');
+nota('  conectado, as salas abertas, a banda que o relay gasta, o ping, e como');
+nota('  anda a máquina — CPU, memória, disco.');
+linha();
+nota('  Cole aqui o ID da SUA CONTA do Discord. Não é o Client ID de cima:');
+nota('  os dois são números parecidos, e o errado só falha na hora de entrar.');
+nota('  No Discord (não no portal): Configurações → Avançado → Modo');
+nota('  desenvolvedor. Depois botão direito no seu nome → "Copiar ID".');
+nota('  Só essa conta abre o painel. Enter pula; um traço ("-") desliga.');
+linha();
+
+const respostaAdmin = await perguntar('Seu ID do Discord (opcional)', {
+  padrao: atual.DISCORD_ADMIN_ID,
+  valida: (v) => {
+    if (!v || v === '-') return null;
+    if (!/^[0-9]{15,21}$/.test(v)) return 'O ID é só números (uns 19). Confira e cole de novo.';
+    // O engano provável é colar de novo o Client ID logo acima. O servidor
+    // aceitaria — é um número válido —, e aí nenhum login jamais bateria,
+    // porque aquele id é da aplicação e não de uma conta.
+    if (v === DISCORD_CLIENT_ID) {
+      return 'Esse é o Client ID da aplicação, não o da sua conta. O painel nunca deixaria você entrar.';
+    }
+    return null;
+  },
+});
+
+// O traço é a única saída: com um valor guardado, o Enter devolve o valor
+// guardado, e sem isto ninguém desligaria o painel sem editar o .env na mão.
+const DISCORD_ADMIN_ID = respostaAdmin === '-' ? '' : respostaAdmin;
+
+// O servidor se recusa a subir com o painel ligado e um segredo curto, e a
+// mensagem manda rodar este assistente — que preservava o segredo curto e caía
+// no mesmo erro. Segredo curto só existe em .env escrito à mão, e trocá-lo é o
+// único jeito de sair do laço.
+if (DISCORD_ADMIN_ID && SESSION_SECRET.length < 32) {
+  SESSION_SECRET = crypto.randomBytes(32).toString('hex');
+  linha();
+  nota('  O segredo de assinatura era curto demais para o painel; gerei outro.');
+  nota('  Quem estiver numa sala agora vai precisar entrar de novo.');
+}
+
 titulo('  Passo 2 de 3 · Endereço público');
 linha();
 nota('  O Discord precisa alcançar o programa que roda no seu computador,');
@@ -172,6 +221,7 @@ gravarEnv({
   DISCORD_CLIENT_ID,
   DISCORD_CLIENT_SECRET,
   DISCORD_BOT_TOKEN,
+  DISCORD_ADMIN_ID,
   PUBLIC_ORIGIN: origem,
 });
 
@@ -206,6 +256,12 @@ linha();
 nota('  No Discord: entre num canal de voz e abra a atividade pelo foguete.');
 nota(`  Fora do Discord, o site funciona direto em ${origem}`);
 linha();
+
+if (DISCORD_ADMIN_ID) {
+  linha(`  ${cor.forte}Painel administrativo:${cor.fim}  ${cor.verde}${origem}/admin${cor.fim}`);
+  nota('  Ele pede login pelo Discord e só abre para a conta que você informou.');
+  linha();
+}
 nota('  O endereço do túnel muda toda vez que você fecha o "npm run tunel".');
 nota('  Quando isso acontecer, o .env se atualiza sozinho — só o "Target" do');
 nota('  passo 1 precisa ser trocado no site do Discord.');

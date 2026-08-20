@@ -49,11 +49,11 @@ COPY --from=build /app/client/dist client/dist
 USER node
 
 # Só o Traefik do Dokploy fala com esta porta; ela não fica exposta na rede.
-EXPOSE 3001
+EXPOSE 31415
 
 # O health serve ao Docker e ao Dokploy: um container que responde 200 aqui
 # está com servidor, salas e build no lugar.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
-  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3001)+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||31415)+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 CMD ["node", "server/index.js"]

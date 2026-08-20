@@ -1,4 +1,5 @@
 import { defineConfig } from 'vite';
+import { LOCAL_PADRAO, LOCAL_WS_PADRAO } from '../shared/porta.js';
 
 export default defineConfig({
   // O .env fica na raiz do projeto, não dentro de client/.
@@ -8,8 +9,8 @@ export default defineConfig({
     // Necessário quando o Vite é exposto por um túnel (cloudflared/ngrok).
     allowedHosts: true,
     proxy: {
-      '/api': 'http://localhost:3001',
-      '/ws': { target: 'ws://localhost:3001', ws: true },
+      '/api': LOCAL_PADRAO,
+      '/ws': { target: LOCAL_WS_PADRAO, ws: true },
     },
   },
   build: {

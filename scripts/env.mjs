@@ -8,6 +8,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { PORTA_PADRAO, LOCAL_PADRAO } from '../shared/porta.js';
+
 export const RAIZ = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const ARQUIVO = path.join(RAIZ, '.env');
 
@@ -64,11 +66,11 @@ export function gravarEnv(novos) {
     `SESSION_SECRET=${v.SESSION_SECRET ?? ''}`,
     '',
     '# Porta em que o programa roda no seu computador.',
-    `PORT=${v.PORT ?? '3001'}`,
+    `PORT=${v.PORT ?? PORTA_PADRAO}`,
     '',
     '# Endereço público pelo qual o Discord alcança o seu computador.',
     '# Atualizado sozinho toda vez que você roda "npm run tunel".',
-    `PUBLIC_ORIGIN=${v.PUBLIC_ORIGIN ?? 'http://localhost:3001'}`,
+    `PUBLIC_ORIGIN=${v.PUBLIC_ORIGIN ?? LOCAL_PADRAO}`,
     '',
     '# Credenciais da sua aplicação no site do Discord.',
     '# Vazias = o programa funciona só no navegador, fora do Discord.',

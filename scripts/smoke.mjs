@@ -8,10 +8,14 @@
  *  - vários transmissores simultâneos sem misturar os streams;
  *  - isolamento entre salas e entre instâncias.
  */
+import { createServer } from 'node:http';
+import { spawn } from 'node:child_process';
 import WebSocket from 'ws';
 
-const BASE = process.env.SMOKE_BASE || 'http://localhost:3001';
-const WSB = process.env.SMOKE_WS || 'ws://localhost:3001';
+import { LOCAL_PADRAO, LOCAL_WS_PADRAO } from '../shared/porta.js';
+
+const BASE = process.env.SMOKE_BASE || LOCAL_PADRAO;
+const WSB = process.env.SMOKE_WS || LOCAL_WS_PADRAO;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let failures = 0;
@@ -398,6 +402,150 @@ const run = async () => {
   await sleep(120);
   check('sala diferente nao vaza binarios', outroViewer.recv.bin.length === 0);
 
+  // ------------------------------------------------------------ anotacoes
+  // Laser e caneta de quem assiste. O que precisa valer: so chega a quem
+  // assiste aquela tela, o desenho fica guardado para quem entra depois, e
+  // apagar a tela dos outros e do dono da transmissao ou de quem criou a sala.
+  // Carla nao criou a sala nem transmite nada: e por ela que se testa o que um
+  // espectador comum pode. Os tokens de `sala` sao da Alice, que e a dona —
+  // anotar por eles concederia permissao sem ninguem perceber.
+  const carla = await identity(CANAL_A, 'Carla');
+  const carlaNaSala = (
+    await api('/api/rooms/join', { identity: carla.identity, roomId: sala.roomId })
+  ).body;
+
+  const anotador = await openViewer(carlaNaSala);
+  await sleep(120);
+  anotador.send(JSON.stringify({ type: 'watch', slot: slot2 }));
+  await sleep(120);
+
+  const anns = (ws, slot) => ws.recv.json.filter((m) => m.type === 'ann' && m.slot === slot);
+  // Alice ja pediu para assistir o slot2 la em cima; e por ela que se confere
+  // o que sai do relay.
+  const espectadorDeSlot2 = viewer;
+
+  viewer.recv.json.length = 0;
+  anotador.send(JSON.stringify({ type: 'ann', slot: slot2, ev: { k: 'p', x: 100, y: 200, c: '#ff4d4f' } }));
+  await sleep(120);
+  check('laser chega a quem assiste a mesma tela', anns(viewer, slot2).length === 1);
+  check(
+    'laser chega tambem a quem transmite',
+    c2.recv.json.some((m) => m.type === 'ann' && m.ev.k === 'p')
+  );
+
+  outroViewer.recv.json.length = 0;
+  anotador.send(JSON.stringify({ type: 'ann', slot: slot2, ev: { k: 'p', x: 1, y: 1 } }));
+  await sleep(100);
+  check('anotacao nao vaza para outra sala', anns(outroViewer, slot2).length === 0);
+
+  // Quem nao pediu para assistir nao desenha: a coordenada normalizada nao
+  // teria sobre o que ter sido escolhida.
+  viewer.recv.json.length = 0;
+  outroViewer.send(JSON.stringify({ type: 'ann', slot: slot2, ev: { k: 'p', x: 5, y: 5 } }));
+  await sleep(100);
+  check('quem nao assiste nao anota', anns(viewer, slot2).length === 0);
+
+  // Assistir uma tela nao da direito de desenhar em outra: a coordenada
+  // normalizada nao teria sobre o que ter sido escolhida.
+  viewer.recv.json.length = 0;
+  anotador.send(JSON.stringify({ type: 'ann', slot: slot1, ev: { k: 'p', x: 7, y: 7 } }));
+  await sleep(120);
+  check('assistir uma tela nao autoriza desenhar em outra', anns(viewer, slot1).length === 0);
+
+  // Quem transmite e a excecao: ele ve a propria tela pela captura, sem
+  // assistir a si mesmo, e precisa poder apontar nela enquanto mostra.
+  const dono2 = await openViewer(bobNaSala);
+  await sleep(120);
+  espectadorDeSlot2.recv.json.length = 0;
+  dono2.send(JSON.stringify({ type: 'ann', slot: slot2, ev: { k: 'p', x: 30, y: 30 } }));
+  await sleep(150);
+  check(
+    'quem transmite desenha na propria tela sem assisti-la',
+    anns(espectadorDeSlot2, slot2).length === 1
+  );
+
+  dono2.send(JSON.stringify({ type: 'ann', slot: slot1, ev: { k: 'p', x: 9, y: 9 } }));
+  await sleep(120);
+  check(
+    'mas so na dele: a tela do outro continua exigindo assistir',
+    anns(viewer, slot1).length === 0
+  );
+  dono2.close();
+
+  viewer.recv.json.length = 0;
+  anotador.send(
+    JSON.stringify({
+      type: 'ann',
+      slot: slot2,
+      ev: { k: 's', id: 1, c: '#38bdf8', w: 10, pts: [10, 10, 20, 20] },
+    })
+  );
+  anotador.send(JSON.stringify({ type: 'ann', slot: slot2, ev: { k: 'a', id: 1, pts: [30, 30] } }));
+  await sleep(120);
+  check('traco e repassado', anns(viewer, slot2).length === 2);
+
+  const novato = await openViewer(sala);
+  await sleep(120);
+  novato.send(JSON.stringify({ type: 'watch', slot: slot2 }));
+  await sleep(150);
+  const sync = novato.recv.json.find((m) => m.type === 'ann-sync' && m.slot === slot2);
+  check('quem entra no meio recebe o que ja esta desenhado', Boolean(sync));
+  check(
+    'o traco sincronizado vem inteiro',
+    sync?.tracos?.[0]?.pts?.length === 6,
+    JSON.stringify(sync?.tracos?.[0]?.pts)
+  );
+
+  // Coordenada fora da grade e evento desconhecido nao podem virar estado.
+  viewer.recv.json.length = 0;
+  anotador.send(JSON.stringify({ type: 'ann', slot: slot2, ev: { k: 'p', x: 99999, y: 0 } }));
+  anotador.send(JSON.stringify({ type: 'ann', slot: slot2, ev: { k: 'zzz' } }));
+  anotador.send(JSON.stringify({ type: 'ann', slot: slot2, ev: { k: 's', id: 2, pts: [1] } }));
+  await sleep(120);
+  check('anotacao malformada e descartada', anns(viewer, slot2).length === 0);
+
+  // Limpar a tela dos outros: so o dono da transmissao e quem criou a sala.
+  viewer.recv.json.length = 0;
+  anotador.send(JSON.stringify({ type: 'ann', slot: slot2, ev: { k: 'ca' } }));
+  await sleep(120);
+  check(
+    'quem so assiste nao limpa o desenho dos outros',
+    !anns(viewer, slot2).some((m) => m.ev.k === 'ca')
+  );
+
+  const depoisDoNao = await openViewer(sala);
+  await sleep(100);
+  depoisDoNao.send(JSON.stringify({ type: 'watch', slot: slot2 }));
+  await sleep(150);
+  check(
+    'o desenho continua la depois da tentativa recusada',
+    depoisDoNao.recv.json.some((m) => m.type === 'ann-sync' && m.tracos.length === 1)
+  );
+
+  // O viewer aqui e a Alice, dona da sala.
+  viewer.recv.json.length = 0;
+  viewer.send(JSON.stringify({ type: 'watch', slot: slot2 }));
+  await sleep(100);
+  viewer.send(JSON.stringify({ type: 'ann', slot: slot2, ev: { k: 'ca' } }));
+  await sleep(150);
+  check(
+    'quem criou a sala limpa a tela de todo mundo',
+    anns(viewer, slot2).some((m) => m.ev.k === 'ca')
+  );
+
+  const depoisDaLimpeza = await openViewer(sala);
+  await sleep(100);
+  depoisDaLimpeza.send(JSON.stringify({ type: 'watch', slot: slot2 }));
+  await sleep(150);
+  check(
+    'depois de limpar, quem entra nao recebe traco nenhum',
+    !depoisDaLimpeza.recv.json.some((m) => m.type === 'ann-sync')
+  );
+
+  [anotador, novato, depoisDoNao, depoisDaLimpeza].forEach((w) => w.close());
+  await sleep(100);
+
+
   // ------------------------------------------------- parar de transmitir
   // Sair da sala precisa encerrar tambem a captura que roda na aba externa:
   // ela tem conexao propria, entao o unico caminho e o servidor avisa-la.
@@ -419,6 +567,14 @@ const run = async () => {
     'stop-broadcast nao derruba a transmissao de outra pessoa',
     !c2.recv.json.some((m) => m.type === 'stop-request')
   );
+
+  // --------------------------------------------- transmissao sem dono na sala
+  // A aba de captura tem conexao propria e nao sabe nada do Discord: fechar a
+  // atividade ou sair da call nao chega ate ela. Quem percebe e o servidor.
+  //
+  // Servidor proprio, com a carencia em dois segundos: o valor de verdade sao
+  // quinze, e esperar quinze parado num teste nao paga o que ele verifica.
+  await testarOrfao();
 
   // ------------------------------------------------------ espelho do avatar
   const avatarOk = await fetch(`${BASE}/api/avatar/123456789012345678/${'a'.repeat(32)}`);
@@ -443,6 +599,117 @@ const run = async () => {
   console.log(failures ? `\n${failures} verificacao(oes) falharam` : '\nTudo passou');
   process.exit(failures ? 1 : 0);
 };
+
+/**
+ * Sobe um servidor so para este caso, com a carencia encurtada.
+ *
+ * O teste precisa de um servidor configurado de um jeito que nao serve para o
+ * resto — e derrubar a transmissao de quem esta usando o servidor de verdade,
+ * so para conferir isto, seria pior do que nao conferir.
+ */
+async function testarOrfao() {
+  const porta = await portaLivre();
+  const base = `http://127.0.0.1:${porta}`;
+
+  const servidor = spawn(process.execPath, ['server/index.js'], {
+    cwd: new URL('..', import.meta.url),
+    stdio: 'ignore',
+    env: {
+      ...process.env,
+      PORT: String(porta),
+      NODE_ENV: 'development',
+      SESSION_SECRET: 'orfao-smoke-secret-com-entropia-suficiente-para-teste',
+      DISCORD_ADMIN_ID: '',
+      BROADCAST_ORPHAN_MS: '2000',
+    },
+  });
+
+  try {
+    await esperarNoAr(`${base}/api/health`);
+
+    const post = async (rota, corpo) =>
+      (await fetch(base + rota, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(corpo),
+      })).json();
+
+    const dono = await post('/api/session-guest', { name: 'Dono' });
+    const sala = await post('/api/rooms/create', { identity: dono.identity, name: 'Orfa' });
+    const wsBase = `ws://127.0.0.1:${porta}`;
+
+    const atividade = await open(`${wsBase}/ws?t=${encodeURIComponent(sala.viewerToken)}`);
+    const captura = await open(
+      `${wsBase}/ws?t=${encodeURIComponent(new URL(sala.shareUrl).searchParams.get('t'))}`
+    );
+    await sleep(200);
+
+    const slot = captura.recv.json.find((m) => m.type === 'slot')?.slot;
+    captura.send(JSON.stringify({ type: 'start' }));
+    await sleep(150);
+
+    // Com a atividade aberta, a transmissao fica: a varredura roda a cada
+    // quatro segundos e nao pode encerrar quem esta na sala.
+    captura.recv.json.length = 0;
+    await sleep(5000);
+    check(
+      'com a atividade aberta, a transmissao continua',
+      !captura.recv.json.some((m) => m.type === 'stop-request') && captura.readyState === WebSocket.OPEN
+    );
+
+    // Fecha so a atividade — a aba de captura continua aberta, que e o caso
+    // real de quem sai do canal de voz e esquece a aba.
+    atividade.close();
+    await sleep(200);
+    captura.recv.json.length = 0;
+
+    let fechou = false;
+    captura.on('close', () => (fechou = true));
+
+    await sleep(7000);
+    check(
+      'sem ninguem do dono na sala, a captura recebe o pedido de parar',
+      captura.recv.json.some((m) => m.type === 'stop-request'),
+      JSON.stringify(captura.recv.json.map((m) => m.type))
+    );
+    check(
+      'o pedido explica por que a transmissao caiu sozinha',
+      captura.recv.json.some((m) => m.type === 'stop-request' && /saiu da sala/i.test(m.reason ?? ''))
+    );
+    check('e o socket da captura e fechado, garantindo o fim', fechou);
+
+    // Entrar de novo depois disso precisa continuar funcionando: a sala nao
+    // pode ter ficado com um slot preso pelo transmissor que saiu.
+    const voltou = await post('/api/rooms/join', { identity: dono.identity, roomId: sala.roomId });
+    check('a sala continua utilizavel depois da limpeza', Boolean(voltou.viewerToken));
+  } finally {
+    servidor.kill();
+  }
+}
+
+function portaLivre() {
+  return new Promise((resolve, reject) => {
+    const sonda = createServer();
+    sonda.once('error', reject);
+    sonda.listen(0, '127.0.0.1', () => {
+      const { port } = sonda.address();
+      sonda.close((erro) => (erro ? reject(erro) : resolve(port)));
+    });
+  });
+}
+
+async function esperarNoAr(url, limiteMs = 10_000) {
+  const prazo = Date.now() + limiteMs;
+  while (Date.now() < prazo) {
+    try {
+      if ((await fetch(url)).ok) return;
+    } catch {
+      // ainda subindo
+    }
+    await sleep(100);
+  }
+  throw new Error('servidor de teste nao subiu a tempo');
+}
 
 run().catch((e) => {
   console.error('erro no teste:', e);

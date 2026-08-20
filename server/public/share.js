@@ -8,7 +8,9 @@
  * Toda a lógica de captura e codificação vive em /shared/broadcaster.js, a mesma
  * usada dentro da Activity — aqui é só a interface.
  */
-import { createBroadcaster, supportError } from '/shared/broadcaster.js?v=4';
+import { createBroadcaster, supportError } from '/shared/broadcaster.js?v=6';
+import { criarCamada, conter } from '/shared/anotacoes.js?v=3';
+import { criarFlutuante, flutuarDisponivel } from '/shared/flutuar.js?v=1';
 
 const $ = (id) => document.getElementById(id);
 
@@ -44,6 +46,79 @@ function conferirRitmo({ fps, seconds }) {
     'aviso'
   );
 }
+
+/**
+ * Laser e desenho de quem assiste, sobre o próprio preview.
+ *
+ * É o que fecha a conversa: sem isto, quem mostra a tela só saberia que
+ * apontaram para alguma coisa se voltasse para a janela do Discord — e voltar
+ * para o Discord costuma significar minimizar justamente o que se está
+ * mostrando.
+ *
+ * A vista é recalculada a cada pintura porque o preview é `object-fit: contain`
+ * dentro de uma caixa 16:9 fixa: numa tela 16:10 sobram tarjas, e um traço
+ * posicionado pela caixa cairia deslocado da imagem.
+ */
+const camada = criarCamada($('previewAnn'), {
+  vista: () => {
+    const video = $('preview');
+    const caixa = video.getBoundingClientRect();
+    if (!caixa.width || !video.videoWidth) return null;
+    const fit = conter(caixa.width, caixa.height, video.videoWidth, video.videoHeight);
+    return { boxW: caixa.width, boxH: caixa.height, ...fit };
+  },
+});
+
+/**
+ * Quem mexeu na tela nos últimos segundos.
+ *
+ * A linha existe porque um traço no canto de uma tela de 27 polegadas passa
+ * despercebido — e o preview aqui é uma miniatura dela. Some sozinha depois de
+ * um tempo parado: a lista é de quem está marcando agora, não de quem já marcou.
+ */
+const desenhando = new Map();
+const MARCA_VIDA_MS = 4000;
+
+function anotar(msg) {
+  if (msg.type === 'ann-sync') {
+    camada.sincronizar(msg.tracos);
+    flutuante?.sincronizar(msg.tracos);
+    return;
+  }
+
+  camada.aplicar(msg);
+  // A janela flutuante tem a própria cópia do desenho: ela o mostra no tamanho
+  // do quadro, e esta aqui no tamanho do preview.
+  flutuante?.aplicar(msg);
+
+  // Apagar não é marcar: quem limpou o que fez sai da linha na hora.
+  if (msg.ev.k === 'ca') desenhando.clear();
+  else if (msg.ev.k === 'c' || msg.ev.k === 'u' || msg.ev.k === 'po') desenhando.delete(msg.uid);
+  else desenhando.set(msg.uid, { name: msg.name, at: Date.now() });
+
+  mostrarQuemMarca();
+}
+
+function mostrarQuemMarca() {
+  const agora = Date.now();
+  for (const [uid, m] of desenhando) {
+    if (agora - m.at > MARCA_VIDA_MS) desenhando.delete(uid);
+  }
+
+  const nomes = [...new Set([...desenhando.values()].map((m) => m.name))];
+  $('annLine').textContent = nomes.length
+    ? `${nomes.join(', ')} ${nomes.length === 1 ? 'está marcando' : 'estão marcando'} sua tela`
+    : '';
+  $('annLine').hidden = !nomes.length;
+}
+
+// A linha precisa sumir mesmo quando não chega mais evento nenhum — e é
+// justamente aí que ela precisa sumir.
+setInterval(() => desenhando.size && mostrarQuemMarca(), 1000);
+
+// O preview redimensiona junto com a janela, e a caixa nova desloca tudo o que
+// já estava desenhado.
+window.addEventListener('resize', () => camada.repintar());
 
 function setStatus(msg, kind = '') {
   const el = $('status');
@@ -116,6 +191,56 @@ function applyPresets() {
   $('presetLine').hidden = false;
 }
 
+/**
+ * A janela flutuante: a tela e as marcações por cima dos outros programas.
+ *
+ * É a resposta para "estou compartilhando e quero ver o que desenharam sem
+ * voltar para o Discord". Nenhuma página desenha no seu desktop — isso o
+ * navegador não permite a ninguém —, mas ela abre uma janela do sistema que
+ * fica acima de tudo, e é o mais perto disso que dá para chegar sem instalar
+ * um programa.
+ */
+let flutuante = null;
+
+$('flutuar').addEventListener('click', async () => {
+  if (flutuante) {
+    flutuante.parar();
+    flutuante = null;
+    mostrarBotaoFlutuar();
+    return;
+  }
+
+  const f = criarFlutuante({
+    fonte: () => ($('preview').videoWidth ? $('preview') : null),
+    dim: () => ({ w: $('preview').videoWidth, h: $('preview').videoHeight }),
+    aoFechar: () => {
+      flutuante = null;
+      mostrarBotaoFlutuar();
+    },
+  });
+
+  // Nasce com o que já está desenhado: quem clica no meio da conversa não pode
+  // receber um quadro em branco e achar que quebrou.
+  f.sincronizar(camada.instantaneo());
+  flutuante = f;
+
+  try {
+    await f.abrir();
+  } catch (err) {
+    flutuante = null;
+    f.parar();
+    if (err.name !== 'NotAllowedError' && err.name !== 'AbortError') setStatus(err.message, 'error');
+  }
+  mostrarBotaoFlutuar();
+});
+
+function mostrarBotaoFlutuar() {
+  const podeVer = flutuarDisponivel() && Boolean(broadcaster);
+  $('flutuar').hidden = !podeVer;
+  $('flutuarNota').hidden = !podeVer || Boolean(flutuante);
+  $('flutuar').textContent = flutuante ? 'Fechar a janela de cima' : 'Ver por cima de tudo';
+}
+
 // -------------------------------------------------------------------- ações
 
 async function start() {
@@ -143,6 +268,7 @@ async function start() {
         `${String(Math.floor(s.seconds / 60)).padStart(2, '0')}:${String(s.seconds % 60).padStart(2, '0')}`;
       conferirRitmo(s);
     },
+    onAnn: anotar,
     onAviso: (msg) => {
       setStatus(msg, 'aviso');
       // O aviso sozinho é um beco: o botão é a saída dele.
@@ -150,6 +276,12 @@ async function start() {
     },
     onEnd: (reason) => {
       broadcaster = null;
+      flutuante?.parar();
+      flutuante = null;
+      mostrarBotaoFlutuar();
+      camada.limpar();
+      desenhando.clear();
+      $('annLine').hidden = true;
       $('preview').srcObject = null;
       $('live').hidden = true;
       $('setup').hidden = false;
@@ -164,6 +296,7 @@ async function start() {
     $('preview').play().catch(() => {});
     $('setup').hidden = true;
     $('live').hidden = false;
+    mostrarBotaoFlutuar();
   } catch (err) {
     broadcaster = null;
     $('start').disabled = false;

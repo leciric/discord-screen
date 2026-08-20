@@ -67,7 +67,7 @@ O assistente pergunta o essencial e escreve o `.env`. Confira ao final que
 ficou assim:
 
 ```
-PORT=3001
+PORT=31415
 PUBLIC_ORIGIN=https://seu-dominio
 NODE_ENV=production
 SESSION_SECRET=<hex de 64 caracteres, gerado pelo assistente>
@@ -75,7 +75,7 @@ DISCORD_CLIENT_ID=...
 DISCORD_CLIENT_SECRET=...
 ```
 
-`PORT=3001` e não 80: quem atende na 80 e na 443 é o Caddy, no passo 6. E o
+`PORT=31415` e não 80: quem atende na 80 e na 443 é o Caddy, no passo 6. E o
 `SESSION_SECRET` não é opcional aqui — com `NODE_ENV=production` o servidor
 recusa subir sem ele, porque sem segredo os crachás de sala seriam forjáveis.
 
@@ -116,7 +116,7 @@ sudo ufw allow 80,443/tcp
 sudo ufw enable
 ```
 
-A 3001 fica fechada de propósito: só o Caddy fala com ela, pelo localhost.
+A 31415 fica fechada de propósito: só o Caddy fala com ela, pelo localhost.
 
 ## 8. Discord
 

@@ -24,6 +24,7 @@ import { fileURLToPath } from 'node:url';
 
 import { lerEnv, gravarEnv, cor } from './env.mjs';
 import { garantirCloudflared, PASTA } from './cloudflared.mjs';
+import { PORTA_PADRAO } from '../shared/porta.js';
 
 const ENDERECO = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/;
 
@@ -53,7 +54,7 @@ const ENDERECO = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/;
  */
 export async function abrirTunel({ aoEndereco = () => {}, rapido = false, gravar } = {}) {
   const env = lerEnv();
-  const porta = env.PORT || '3001';
+  const porta = env.PORT || PORTA_PADRAO;
   const config = rapido ? '' : env.TUNEL_CONFIG || '';
 
   // Um túnel descartável nunca sobrescreve o endereço de quem tem túnel
@@ -104,7 +105,7 @@ export async function abrirTunel({ aoEndereco = () => {}, rapido = false, gravar
 
     achado = url;
     if (escrever) gravarEnv({ PUBLIC_ORIGIN: url });
-    anunciar(url, escrever, env.DISCORD_CLIENT_ID);
+    anunciar(url, escrever, env.DISCORD_CLIENT_ID, env.DISCORD_ADMIN_ID);
     aoEndereco(url);
   };
 
@@ -166,7 +167,7 @@ function configNeutro() {
   return caminho;
 }
 
-function anunciar(url, escreveu, temDiscord) {
+function anunciar(url, escreveu, temDiscord, temPainel) {
   const dominio = url.replace('https://', '');
   console.log(`\n${cor.verde}${cor.forte}  Endereço do túnel: ${url}${cor.fim}`);
   console.log(
@@ -187,13 +188,25 @@ function anunciar(url, escreveu, temDiscord) {
   console.log('  E em OAuth2 → Redirects:');
   console.log(`\n      ${cor.verde}${url}/auth/callback${cor.fim}\n`);
   console.log(`${cor.fraco}  (esse endereço muda toda vez que este comando reinicia)${cor.fim}\n`);
+
+  // Depois das instruções do portal, porque aquelas são obrigatórias e esta é
+  // um extra. Mas precisa estar aqui: com túnel descartável o endereço do
+  // painel muda a cada reinício, e montá-lo de cabeça toda vez é o tipo de
+  // atrito que faz não se olhar o painel nunca.
+  //
+  // Só com credencial do Discord: o login do painel é OAuth, e sem Client ID
+  // ele levaria a uma página de erro do próprio Discord.
+  if (temPainel) {
+    console.log('  E o painel administrativo fica em:');
+    console.log(`\n      ${cor.verde}${url}/admin${cor.fim}\n`);
+  }
 }
 
 // ------------------------------------------------------------------ comando
 
 // Só quando chamado direto. Importado pelo dev.mjs, nada disto roda.
 if (path.resolve(fileURLToPath(import.meta.url)) === path.resolve(process.argv[1] ?? '')) {
-  const porta = lerEnv().PORT || '3001';
+  const porta = lerEnv().PORT || PORTA_PADRAO;
   console.log(`\n${cor.fraco}  Abrindo o túnel para localhost:${porta}…${cor.fim}`);
   console.log(`${cor.fraco}  Deixe esta janela aberta enquanto estiver usando.${cor.fim}\n`);
 

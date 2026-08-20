@@ -123,8 +123,17 @@ O relógio de envio serve só para medir atraso. É exato na mesma máquina; ent
 máquinas diferentes, aproximado.
 
 Controle vai em JSON: `start`, `config`, `audio-config`, `stop`
-(transmissor → servidor); `state`, `stream-start`, `config`, `audio-config`,
-`stream-stop`, `need-keyframe`, `error` (servidor → clientes).
+(transmissor → servidor); `watch`, `unwatch`, `rename`, `stop-broadcast`, `ann`
+(espectador → servidor); `state`, `stream-start`, `config`, `audio-config`,
+`stream-stop`, `need-keyframe`, `stop-request`, `ann`, `ann-sync`, `error`
+(servidor → clientes).
+
+As anotações (`ann`) carregam coordenadas normalizadas ao quadro, em inteiros de
+0 a 4095 — não em pixels de tela. Cada pessoa assiste num tamanho e num zoom
+diferentes, e um traço em pixels chegaria torto em todo mundo menos em quem
+desenhou. O servidor guarda os traços de cada transmissão para mandar em
+`ann-sync` a quem chega no meio; o laser não é guardado, ele se refaz no quadro
+seguinte.
 
 ## Detalhes que não são acidentais
 
@@ -142,6 +151,14 @@ Controle vai em JSON: `start`, `config`, `audio-config`, `stop`
   espectador com internet ruim derruba o processo por consumo de memória.
 - **`/.proxy/`** em todo fetch e WebSocket feito de dentro da atividade — é
   assim que o Discord roteia para o seu servidor.
+- **Transmissão sem dono na sala é encerrada.** A aba de captura tem conexão
+  própria e não sabe nada do Discord: fechar a atividade ou sair do canal de voz
+  não chega até ela, e a tela seguia indo para uma sala já abandonada. Quem
+  percebe é o servidor, pela ausência de qualquer conexão de espectador daquele
+  dono. Há quinze segundos de carência porque recarregar a atividade desconecta
+  e reconecta — sem eles, um F5 derrubaria a transmissão. O relógio começa no
+  instante da desconexão, não na varredura seguinte. `BROADCAST_ORPHAN_MS`
+  encurta a carência; existe para o teste não esperar quinze segundos parado.
 - **Client ID vem do servidor, não do build.** Embutir no bundle obrigava a
   rebuildar a cada troca de credencial, e esquecer disso não dava erro: a
   atividade abria e só quebrava no login.
@@ -160,6 +177,9 @@ client/
   src/audio.js    decodifica o som e agenda a reprodução
 shared/
   broadcaster.js  captura + codificação, usada pela aba e pela atividade
+  anotacoes.js    estado e desenho do laser e da caneta
+  flutuar.js      a janela por cima de tudo (composição + Picture-in-Picture)
+  porta.js        a porta padrão, num lugar só
 scripts/
   configurar.mjs  assistente de configuração
   tunel.mjs       sobe o túnel e grava o endereço no .env
@@ -180,5 +200,5 @@ streams, e isolamento entre salas e instâncias.
 ## Rodando enquanto mexe no código
 
 `npm start` reconstrói o site a cada execução. Para recarregar sozinho a cada
-salvamento, use `npm run dev` — ele sobe o servidor na 3001 e o site na 5173,
+salvamento, use `npm run dev` — ele sobe o servidor na 31415 e o site na 5173,
 e é a 5173 que você abre.

@@ -72,6 +72,7 @@ export function supportError({ requireChromium = false } = {}) {
  * @param {(reason:string)=>void} [opts.onEnd]   encerrou (por qualquer motivo)
  * @param {(msg:string)=>void} [opts.onAviso]    algo mudou sem ser erro
  * @param {(msg:string)=>void} [opts.onError]
+ * @param {(msg:object)=>void} [opts.onAnn]      laser/desenho de quem assiste
  */
 export function createBroadcaster({
   wsUrl,
@@ -83,6 +84,7 @@ export function createBroadcaster({
   onEnd,
   onError,
   onAviso,
+  onAnn,
 }) {
   let ws = null;
   let stream = null;
@@ -599,7 +601,15 @@ export function createBroadcaster({
         else if (msg.type === 'state') viewers = msg.viewers;
         // Alguém entrou na sala e precisa de um ponto de partida.
         else if (msg.type === 'need-keyframe') wantKeyframe = true;
-        else if (msg.type === 'stop-request') stop('Transmissão encerrada pela atividade.');
+        // O motivo vem do servidor quando ele tem um: "você saiu da sala" é
+        // bem diferente de "você clicou em parar", e a diferença é tudo o que a
+        // pessoa tem para entender por que a captura sumiu sozinha.
+        else if (msg.type === 'stop-request') {
+          stop(msg.reason ?? 'Transmissão encerrada pela atividade.');
+        }
+        // Laser e desenho de quem assiste. Chegam aqui para quem transmite ver
+        // o que estão apontando na própria tela, sem ter que voltar ao Discord.
+        else if (msg.type === 'ann' || msg.type === 'ann-sync') onAnn?.(msg);
         else if (msg.type === 'error') {
           if (running) stop(msg.message);
           else {

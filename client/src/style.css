@@ -260,7 +260,12 @@ body {
 
    Com a caixa definida, `contain` faz o resto: reduz ou amplia preservando a
    proporção, nunca corta, e deixa o fundo preto aparecer nas sobras. */
-.tile canvas {
+/* `video` junto de `canvas`: quem transmite daqui vê a própria captura por um
+   <video> ligado direto na origem, e ele precisa ser enquadrado exatamente como
+   o canvas de quem assiste — senão o traço, que é posicionado pela mesma conta,
+   cairia deslocado da imagem. */
+.tile canvas,
+.tile video {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -268,6 +273,214 @@ body {
   object-fit: contain;
   display: block;
   background: #000;
+}
+
+/* ------------------------------------------------ superfície: vídeo + traços */
+
+/* O vídeo e a camada de anotações andam juntos e são recortados pela mesma
+   borda: sem o overflow, a imagem ampliada vazaria por cima do tile ao lado. */
+.surface {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+}
+
+/* transform-origin no canto: toda a conta de zoom e deslocamento em main.js
+   assume origem em (0,0). Com a origem no centro, o padrão do CSS, a imagem
+   escaparia da caixa em cada aproximação. */
+.surface .video {
+  transform-origin: 0 0;
+  background: transparent;
+}
+
+/* A camada é redesenhada na resolução da tela, então o buffer já tem a
+   proporção da caixa — `contain` só arriscaria uma tarja de arredondamento. */
+.surface .ann {
+  object-fit: fill;
+  background: transparent;
+  pointer-events: none;
+}
+
+/* O fundo preto sai do canvas e vem para a superfície: com o vídeo ampliado, um
+   canvas com fundo próprio pintaria de preto a área que ele deixou para trás. */
+.tile.sharing .surface {
+  background: #000;
+}
+
+.surface.ampliado .video {
+  will-change: transform;
+}
+
+/* touch-action: none só no palco. Na lateral o dedo precisa continuar rolando a
+   barra — é lá que estão as pessoas e as outras telas. */
+.tile-palco .surface {
+  touch-action: none;
+}
+
+.tile-palco .surface[data-f='caneta'] {
+  cursor: crosshair;
+}
+
+.tile-palco .surface[data-f='laser'] {
+  cursor: cell;
+}
+
+.tile-palco .surface.ampliado[data-f='mover'] {
+  cursor: grab;
+}
+
+.tile-palco .surface.arrastando[data-f='mover'] {
+  cursor: grabbing;
+}
+
+/* ------------------------------------------------------- barra do palco */
+
+/* Flutua sobre a tela, no alto e ao centro: o canto de baixo já tem o nome, o
+   contador de quem assiste e o botão de parar. Fica discreta enquanto o mouse
+   está longe — a tela é que importa —, e inteira assim que ele chega. */
+.tools {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 999px;
+  background: rgba(15, 16, 18, 0.82);
+  border: 1px solid var(--line);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(6px);
+  opacity: 0.28;
+  transition: opacity 0.15s;
+}
+
+/* Com ferramenta escolhida ou zoom aplicado ela fica firme (`.fixa`): apagar no
+   meio de um desenho seria esconder justamente o controle que está em uso. */
+.tile-palco:hover .tools,
+.tools:focus-within,
+.tools.fixa {
+  opacity: 1;
+}
+
+.tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  height: 34px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: 600 12px/1 inherit;
+  font-variant-numeric: tabular-nums;
+  position: relative;
+  transition: background 0.12s, color 0.12s;
+}
+
+.tool:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+.tool.ativo {
+  background: var(--accent);
+  color: #fff;
+}
+
+.tool svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.tool-zoom {
+  min-width: 46px;
+}
+
+/* A dica destes botões abre para baixo, ao contrário de todas as outras.
+   A barra mora no alto do palco e o tile recorta o que passa da borda, então
+   para cima a dica saía fatiada — só a última fileira de pixels aparecia,
+   encostada na moldura. Para baixo ela cai sobre o vídeo, que é justamente o
+   espaço que sobra. */
+.tools [data-tip]::after {
+  top: calc(100% + 10px);
+  bottom: auto;
+}
+
+.tool-sep {
+  width: 1px;
+  height: 20px;
+  margin: 0 3px;
+  background: var(--line);
+}
+
+.tool-cores {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 4px;
+}
+
+.cor {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  background: var(--cor);
+  transition: transform 0.12s, border-color 0.12s;
+}
+
+.cor:hover {
+  transform: scale(1.15);
+}
+
+.cor.ativa {
+  border-color: #fff;
+  transform: scale(1.15);
+}
+
+/* Três barrinhas de alturas diferentes: a espessura se escolhe olhando, não
+   lendo um número que não quer dizer nada até o traço sair. */
+.grossura {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+}
+
+.grossura span {
+  display: block;
+  width: 15px;
+  border-radius: 999px;
+  background: var(--muted);
+}
+
+.grossura:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.grossura.ativa {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.grossura.ativa span {
+  background: var(--text);
 }
 
 /* --------------------------------------------------- convite para assistir */
@@ -1325,6 +1538,26 @@ button {
 
   /* O ícone e a cor já dizem o que o botão faz; a dica cobre o resto. */
   #shareLabel {
+    display: none;
+  }
+
+  .tools {
+    top: 6px;
+    gap: 0;
+    padding: 3px;
+  }
+
+  .tool {
+    min-width: 30px;
+    height: 30px;
+    padding: 0 5px;
+  }
+
+  /* Numa faixa estreita a barra inteira não cabe, e o que menos falta ali é a
+     paleta: a cor escolhida continua valendo, só não dá para trocar sem
+     alargar a janela. */
+  .tool-cores,
+  .tool-sep {
     display: none;
   }
 

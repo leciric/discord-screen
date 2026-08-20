@@ -11,6 +11,7 @@ import { signToken, verifyToken } from './tokens.js';
 import * as R from './rooms.js';
 import { systemSnapshot, startSampling } from './system.js';
 import { buildAdminDashboard } from './admin.js';
+import { PORTA_PADRAO, LOCAL_PADRAO } from '../shared/porta.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
@@ -20,8 +21,8 @@ const {
   DISCORD_CLIENT_SECRET,
   DISCORD_BOT_TOKEN,
   DISCORD_ADMIN_ID = '',
-  PUBLIC_ORIGIN: ORIGEM_CRUA = 'http://localhost:3001',
-  PORT = 3001,
+  PUBLIC_ORIGIN: ORIGEM_CRUA = LOCAL_PADRAO,
+  PORT = PORTA_PADRAO,
   NODE_ENV = 'development',
 } = process.env;
 
@@ -898,6 +899,13 @@ function handleViewer(ws, room, auth) {
 
     if (msg.type === 'unwatch' && Number.isInteger(msg.slot)) {
       R.unwatch(room, ws, msg.slot);
+      return;
+    }
+
+    // Laser e caneta sobre a tela de alguém. Passa direto para o relay, que é
+    // quem valida, guarda e limita — aqui não há decisão a tomar.
+    if (msg.type === 'ann' && Number.isInteger(msg.slot)) {
+      R.pushAnn(room, ws, msg.slot, msg.ev);
       return;
     }
 

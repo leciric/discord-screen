@@ -2,6 +2,8 @@ import { DiscordSDK } from '@discord/embedded-app-sdk';
 import { createPlayer } from './player.js';
 import { createAudio } from './audio.js';
 import { createBroadcaster } from '../../shared/broadcaster.js';
+import { criarCamada, conter, paraGrade, CORES, ESPESSURAS } from '../../shared/anotacoes.js';
+import { criarFlutuante, flutuarDisponivel } from '../../shared/flutuar.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -34,6 +36,9 @@ let reconnectDelay = 1000;
 let lagTimer = null;
 // Transmissão nascida aqui dentro, quando o Discord permite capturar no iframe.
 let myBroadcast = null;
+// A captura em si, quando ela nasce nesta página. É o que alimenta a prévia
+// local — a tela de quem transmite, mostrada a ele sem passar pela rede.
+let meuStream = null;
 // Volume de tudo que chega, de 0 a 1. Vale para todas as telas e sobrevive a
 // trocar de sala: é preferência de quem assiste, não estado de uma transmissão.
 // Zero é o mudo — um número só, em vez de dois estados que precisam concordar.
@@ -74,6 +79,38 @@ let volumeAntes = volume || 1;
 // de quem assiste precisa sobreviver a isso.
 let activeSlot = null;
 let telaCheia = false;
+
+/**
+ * Ferramenta do ponteiro sobre a tela em destaque.
+ *
+ * 'mover' arrasta a imagem ampliada, 'laser' aponta e 'caneta' desenha. Só uma
+ * de cada vez, como em qualquer editor: o mesmo arrasto não pode significar
+ * duas coisas.
+ */
+let ferramenta = 'mover';
+let corCaneta = CORES.includes(read('annCor')) ? read('annCor') : CORES[0];
+let espessura = Number(read('annEsp')) || ESPESSURAS.medio;
+// Esconder os traços é escolha de quem assiste e não sai daqui: some da minha
+// tela, continua na de todo mundo. Guardado como as outras preferências de
+// quem assiste — e a barra fica firme enquanto vale, senão vira um estado
+// invisível que faz o recurso parecer quebrado na sessão seguinte.
+let esconderTracos = read('annEsconder') === '1';
+// Ids de traço só precisam ser únicos dentro de uma pessoa: o servidor os
+// namespaceia com o id de quem desenhou.
+let seqTraco = 0;
+// Arrastar, desenhar e apontar terminam num clique que o navegador entrega ao
+// tile — e o tile alterna a tela cheia. Este relógio é o que separa um clique
+// de verdade do rastro de uma interação que já aconteceu.
+let cliqueBloqueadoAte = 0;
+const bloquearClique = () => (cliqueBloqueadoAte = performance.now() + 350);
+
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 8;
+
+// Gesto em curso sobre a tela em destaque, e se a grade pediu para ser refeita
+// enquanto isso. Ver a guarda em renderGrid.
+let interagindo = false;
+let renderPendente = false;
 
 // ------------------------------------------------------------------- helpers
 
@@ -209,6 +246,20 @@ window.addEventListener('resize', () => inRoom() && applyStrip());
  * quem está junto, e é a call que se perde nisso.
  */
 function renderGrid() {
+  // Um gesto em andamento não pode ser interrompido por uma mudança de estado
+  // da sala: a grade é refeita do zero, o tile do palco é outro nó, e tirar a
+  // superfície do DOM no meio do caminho solta a captura do ponteiro — o traço
+  // seria cortado ao meio porque alguém entrou na sala.
+  if (interagindo) {
+    renderPendente = true;
+    return;
+  }
+  renderPendente = false;
+
+  // A barra é refeita a cada render, junto do tile do palco. Zerar aqui evita
+  // que a referência sobreviva ao tile que a continha — sem palco não há barra.
+  barra = null;
+
   const grid = $('grid');
 
   // Fora de uma sala quem manda é o lobby. Sem esta guarda, o render disparado
@@ -261,6 +312,7 @@ function renderGrid() {
   if (!noPalco) {
     grid.style.setProperty('--cols', columnsFor(participants.length));
     grid.append(...participants.map((p) => buildTile(p).el));
+    sincronizarZoom();
     return;
   }
 
@@ -272,10 +324,24 @@ function renderGrid() {
   };
   grid.append(buildTile(emCena, { palco: true }).el);
 
-  if (telaCheia) return;
+  if (telaCheia) {
+    sincronizarZoom();
+    return;
+  }
 
   applyStrip();
   grid.append(divider, buildSidebar(casters));
+  sincronizarZoom();
+}
+
+/**
+ * Reaplica o zoom depois de cada render.
+ *
+ * A aproximação só vale no palco, e o palco muda: promover outra tela precisa
+ * devolver a anterior ao tamanho normal e ampliar a nova onde ela parou.
+ */
+function sincronizarZoom() {
+  for (const slot of streams.keys()) aplicarZoom(slot);
 }
 
 /**
@@ -356,47 +422,58 @@ function buildTile(p, { palco = false, semVideo = false } = {}) {
   // Com a forma do vídeo no próprio tile, a moldura passa a abraçar a imagem.
   // Sem isto, uma tela 16:9 dentro de um palco largo e baixo encolhia até caber
   // na altura e sobrava um retângulo preto ocupando metade da área.
-  if (palco && stream?.canvas.width) {
-    tile.style.aspectRatio = `${stream.canvas.width} / ${stream.canvas.height}`;
+  if (palco && stream?.dim().w) {
+    const { w, h } = stream.dim();
+    tile.style.aspectRatio = `${w} / ${h}`;
   }
 
   const aoClicar = () => {
+    // Arrastar, desenhar, apontar e ampliar terminam num clique que o navegador
+    // entrega aqui. Sem esta guarda, cada traço alternava a tela cheia.
+    if (performance.now() < cliqueBloqueadoAte) return;
     if (palco) telaCheia = !telaCheia;
     else activeSlot = slot;
     renderGrid();
   };
 
   if (stream) {
-    tile.append(stream.canvas);
+    tile.append(stream.surface);
+    if (palco) tile.append(buildFerramentas(slot));
     tile.title = palco
       ? telaCheia
         ? 'Clique para sair da tela cheia'
         : 'Clique para ver em tela cheia'
       : 'Clique para ver em destaque';
     tile.addEventListener('click', aoClicar);
-    // Botão direito para largar a tela, sem precisar caçar controle.
-    tile.addEventListener('contextmenu', (e) => {
-      e.preventDefault();
-      openTileMenu(e.clientX, e.clientY, slot, p.name);
-    });
 
     // Entre pedir para assistir e o primeiro quadro chegar existe uma espera
     // real: sem este aviso ela é indistinguível de um travamento.
     if (!stream.started) tile.append(buildLoading());
 
-    // O clique direito pode ser capturado pelo cliente do Discord antes de
-    // chegar aqui, então o botão visível é o caminho garantido.
-    const stop = document.createElement('button');
-    stop.className = 'tile-stop';
-    stop.dataset.tip = 'Parar de assistir';
-    stop.setAttribute('aria-label', `Parar de assistir ${p.name}`);
-    stop.innerHTML =
-      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
-    stop.addEventListener('click', (e) => {
-      e.stopPropagation();
-      unwatchSlot(slot);
-    });
-    tile.append(stop);
+    // Nada de "parar de assistir" na prévia da própria captura: não há o que
+    // parar, ela não veio pela rede. Quem quer parar usa o botão de encerrar a
+    // transmissão, que é outra coisa e mora no dock.
+    if (!stream.local) {
+      // Botão direito para largar a tela, sem precisar caçar controle.
+      tile.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        openTileMenu(e.clientX, e.clientY, slot, p.name);
+      });
+
+      // O clique direito pode ser capturado pelo cliente do Discord antes de
+      // chegar aqui, então o botão visível é o caminho garantido.
+      const stop = document.createElement('button');
+      stop.className = 'tile-stop';
+      stop.dataset.tip = 'Parar de assistir';
+      stop.setAttribute('aria-label', `Parar de assistir ${p.name}`);
+      stop.innerHTML =
+        '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+      stop.addEventListener('click', (e) => {
+        e.stopPropagation();
+        unwatchSlot(slot);
+      });
+      tile.append(stop);
+    }
   } else if (slot !== null) {
     // O convite tem botão próprio, que para o clique antes de chegar no tile.
     if (!palco) tile.addEventListener('click', aoClicar);
@@ -528,7 +605,8 @@ function openProfile() {
   $('profileId').textContent = inDiscord ? `Discord · ${session.user.id}` : 'modo local';
   $('profileInput').value = me.name;
 
-  $('profileModal').hidden = false;
+  $('profileModal').hidden = false;
+
   $('profileInput').focus();
   $('profileInput').select();
 }
@@ -760,31 +838,903 @@ function renderBar() {
   $('pWho').textContent = casters.length ? casters.map((p) => p.name).join(', ') : 'ninguém';
 }
 
+// ---------------------------------------------------------- zoom e anotações
+
+/**
+ * Onde a imagem do vídeo está, em pixels CSS dentro da caixa do tile.
+ *
+ * Todo o resto depende disto: o zoom escreve nela, o desenho lê dela para
+ * normalizar o ponto, e a camada de anotações a usa para pintar. O canvas do
+ * vídeo tem `object-fit: contain`, então a imagem quase nunca ocupa a caixa
+ * inteira — desenhar assumindo que ocupa põe o traço na tarja preta.
+ */
+function vistaDe(slot) {
+  const s = streams.get(slot);
+  if (!s) return null;
+
+  const box = s.surface.getBoundingClientRect();
+  const { w: vw, h: vh } = s.dim();
+  if (!box.width || !box.height || !vw || !vh) return null;
+
+  const fit = conter(box.width, box.height, vw, vh);
+  const { z, tx, ty } = zoomDe(slot, s);
+
+  return {
+    left: box.left,
+    top: box.top,
+    boxW: box.width,
+    boxH: box.height,
+    x: fit.x * z + tx,
+    y: fit.y * z + ty,
+    w: fit.w * z,
+    h: fit.h * z,
+  };
+}
+
+/**
+ * O zoom vale só no palco.
+ *
+ * A mesma transmissão aparece em miniatura na lateral, e ampliar ali cortaria a
+ * miniatura sem que ninguém tivesse pedido. O valor fica guardado: quem volta a
+ * pôr aquela tela em destaque encontra a aproximação onde deixou.
+ */
+const zoomDe = (slot, s) => (slot === activeSlot ? s.zoom : { z: 1, tx: 0, ty: 0 });
+
+/** Ponto do evento na grade normalizada do vídeo, ou null fora dele. */
+function pontoDe(slot, e) {
+  const v = vistaDe(slot);
+  if (!v) return null;
+  return paraGrade(e.clientX - v.left, e.clientY - v.top, v);
+}
+
+/**
+ * Mantém a imagem cobrindo a caixa enquanto for maior que ela, e centrada
+ * quando for menor. Sem isto, arrastar leva a tela para fora e sobra preto.
+ */
+function limitarPan(s) {
+  const box = s.surface.getBoundingClientRect();
+  const { w: vw, h: vh } = s.dim();
+  if (!box.width || !vw) return;
+
+  const fit = conter(box.width, box.height, vw, vh);
+  s.zoom.tx = limitarEixo(s.zoom.tx, fit.x, fit.w, box.width, s.zoom.z);
+  s.zoom.ty = limitarEixo(s.zoom.ty, fit.y, fit.h, box.height, s.zoom.z);
+}
+
+function limitarEixo(t, inicio, tamanho, caixa, z) {
+  const i = inicio * z;
+  const tam = tamanho * z;
+  if (tam <= caixa) return (caixa - tam) / 2 - i;
+  return Math.min(-i, Math.max(caixa - i - tam, t));
+}
+
+/** Escreve o zoom no canvas do vídeo e manda a camada repintar em cima. */
+function aplicarZoom(slot) {
+  const s = streams.get(slot);
+  if (!s) return;
+
+  const { z, tx, ty } = zoomDe(slot, s);
+  s.midia.style.transform =
+    z === 1 && !tx && !ty ? '' : `translate(${tx}px, ${ty}px) scale(${z})`;
+  s.surface.classList.toggle('ampliado', slot === activeSlot && s.zoom.z > 1);
+  s.ann.repintar();
+
+  if (slot === activeSlot) mostrarZoom();
+}
+
+/**
+ * @param {number} alvo       fator desejado
+ * @param {number} [cx],[cy]  âncora em coordenadas de tela; sem ela, o centro
+ */
+function definirZoom(slot, alvo, cx, cy) {
+  const s = streams.get(slot);
+  if (!s || slot !== activeSlot) return;
+
+  const box = s.surface.getBoundingClientRect();
+  const { w: vw, h: vh } = s.dim();
+  if (!box.width || !vw) return;
+
+  const z0 = s.zoom.z;
+  const z = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, alvo));
+  if (Math.abs(z - z0) < 0.001) return;
+
+  const fit = conter(box.width, box.height, vw, vh);
+  const bx = (cx ?? box.left + box.width / 2) - box.left;
+  const by = (cy ?? box.top + box.height / 2) - box.top;
+
+  // Guarda o ponto do vídeo que está sob o cursor e o recoloca lá depois de
+  // trocar a escala. É o que faz a roda aproximar o que se está olhando, em vez
+  // do centro da tela.
+  const u = (bx - (fit.x * z0 + s.zoom.tx)) / (fit.w * z0);
+  const v = (by - (fit.y * z0 + s.zoom.ty)) / (fit.h * z0);
+
+  s.zoom.z = z;
+  s.zoom.tx = bx - u * fit.w * z - fit.x * z;
+  s.zoom.ty = by - v * fit.h * z - fit.y * z;
+
+  limitarPan(s);
+  aplicarZoom(slot);
+}
+
+/**
+ * Abre a prévia da própria captura, assim que houver onde pendurá-la.
+ *
+ * Chamada de dois lugares porque a ordem entre eles não é garantida: a captura
+ * fica pronta aqui, mas o número do slot só existe depois que o servidor
+ * anuncia a transmissão de volta. Quem chegar por último é quem abre.
+ */
+function garantirPreviaLocal() {
+  if (!meuStream || !session) return;
+
+  const slot = slotOf(session.user.id);
+  if (slot === null) return;
+  if (streams.get(slot)?.local) return;
+
+  abrirPreviaLocal(slot);
+  renderGrid();
+  renderBar();
+}
+
+/** Tira a prévia de cena. Quem encerra a captura é quem a abriu. */
+function fecharPreviaLocal() {
+  for (const [slot, s] of [...streams]) if (s.local) closeStream(slot);
+}
+
+/**
+ * Laser e desenho chegando pelo socket de quem transmite.
+ *
+ * Este é o outro caminho da mesma informação: quem assiste recebe pelo socket
+ * de espectador, quem transmite recebe pelo de transmissor. Só existe porque
+ * quem transmite não assiste à própria tela — ele a vê pela captura.
+ */
+function anotarNaPrevia(msg) {
+  const slot = session ? slotOf(session.user.id) : null;
+  const s = slot === null ? null : streams.get(slot);
+  if (!s?.local) return;
+
+  if (msg.type === 'ann-sync') {
+    sincronizarAnn(slot, msg.tracos);
+    return;
+  }
+  // O meu já foi desenhado no eco local, como do lado de quem assiste.
+  if (msg.uid !== session?.user?.id) anotarEm(slot, msg);
+}
+
+/**
+ * Abre (ou fecha) a janela flutuante daquela tela.
+ *
+ * Ela nasce já com o que estiver desenhado: quem clica no meio de uma conversa
+ * não pode receber um quadro em branco e achar que quebrou.
+ */
+async function alternarFlutuante(slot) {
+  const s = streams.get(slot);
+  if (!s) return;
+
+  if (s.flutuante) {
+    s.flutuante.parar();
+    s.flutuante = null;
+    sincronizarBarra();
+    return;
+  }
+
+  const f = criarFlutuante({
+    fonte: () => (s.dim().w ? s.midia : null),
+    dim: () => s.dim(),
+    aoFechar: () => {
+      s.flutuante = null;
+      sincronizarBarra();
+    },
+  });
+
+  f.sincronizar(s.ann.instantaneo());
+  f.mostrar(!esconderTracos);
+  s.flutuante = f;
+
+  try {
+    await f.abrir();
+  } catch (err) {
+    s.flutuante = null;
+    f.parar();
+    // Cancelar não é erro; qualquer outra coisa a pessoa precisa saber.
+    if (err.name !== 'NotAllowedError' && err.name !== 'AbortError') toast(err.message, true);
+  }
+  sincronizarBarra();
+}
+
+/** Fator atual de uma tela, ou 1 quando ela não está sendo assistida. */
+const zoomAtual = (slot) => streams.get(slot)?.zoom.z ?? 1;
+
+function zerarZoom(slot = activeSlot) {
+  const s = streams.get(slot);
+  if (!s) return;
+  s.zoom = { z: 1, tx: 0, ty: 0 };
+  aplicarZoom(slot);
+}
+
+/**
+ * Envia a anotação e a desenha aqui na mesma hora.
+ *
+ * O eco local não é otimização: a volta pelo servidor é visível na ponta do
+ * lápis, e um traço que aparece depois da mão parece um travamento.
+ */
+function emitir(slot, ev) {
+  ws?.send(JSON.stringify({ type: 'ann', slot, ev }));
+  anotarEm(slot, { uid: session?.user?.id, name: session?.user?.name, ev });
+}
+
+/**
+ * Aplica uma anotação em todas as superfícies daquela tela.
+ *
+ * São até duas: a do palco e a da janela flutuante. Elas mostram o mesmo estado
+ * em tamanhos diferentes — uma na caixa do tile, com o zoom de quem assiste, a
+ * outra no tamanho do quadro —, então cada uma guarda a sua cópia e as duas
+ * recebem tudo.
+ */
+function anotarEm(slot, msg) {
+  const s = streams.get(slot);
+  if (!s) return;
+  s.ann.aplicar(msg);
+  s.flutuante?.aplicar(msg);
+}
+
+/**
+ * Espalha a escolha de mostrar ou esconder por tudo que desenha.
+ *
+ * Toda camada que existe agora e toda que nascer depois — por isso as duas
+ * fábricas também chamam isto, e não só o botão.
+ */
+function aplicarVisibilidade() {
+  for (const s of streams.values()) {
+    s.ann.mostrar(!esconderTracos);
+    s.flutuante?.mostrar(!esconderTracos);
+  }
+}
+
+function alternarTracos() {
+  esconderTracos = !esconderTracos;
+  store('annEsconder', esconderTracos ? '1' : '');
+  aplicarVisibilidade();
+  sincronizarBarra();
+}
+
+function sincronizarAnn(slot, tracos) {
+  const s = streams.get(slot);
+  if (!s) return;
+  s.ann.sincronizar(tracos);
+  s.flutuante?.sincronizar(tracos);
+}
+
+/** Quem apaga o desenho dos outros: o dono da tela e quem criou a sala. */
+function podeLimparTudo() {
+  const eu = session?.user?.id;
+  if (!eu || activeSlot === null) return false;
+  return available.get(activeSlot)?.userId === eu || lastRoomState?.ownerId === eu;
+}
+
+function definirFerramenta(f) {
+  if (ferramenta === f) return;
+
+  // Pegar o lápis com os traços escondidos é desenhar no escuro: nem o próprio
+  // traço apareceria. Volta a mostrar em vez de deixar a pessoa concluir que a
+  // caneta parou de funcionar.
+  if (esconderTracos && (f === 'caneta' || f === 'laser')) {
+    esconderTracos = false;
+    store('annEsconder', '');
+    aplicarVisibilidade();
+  }
+
+  // Sai apontando: o ponto de quem trocou de ferramenta ficaria parado na tela
+  // dos outros até o tempo de vida do laser acabar.
+  if (ferramenta === 'laser' && activeSlot !== null) emitir(activeSlot, { k: 'po' });
+
+  ferramenta = f;
+  for (const s of streams.values()) s.surface.dataset.f = f;
+  sincronizarBarra();
+}
+
+// -------------------------------------------------------- pointer no palco
+
+/**
+ * Liga roda, arrasto, pinça e desenho na superfície de uma transmissão.
+ *
+ * Os ouvintes nascem uma vez, junto da superfície, e não a cada renderGrid: a
+ * superfície é um nó só que passeia entre os tiles, e reatar ouvintes a cada
+ * mudança de estado da sala derrubaria um traço no meio.
+ *
+ * Todo handler começa perguntando se esta tela está no palco. Na lateral, o
+ * evento precisa continuar subindo até o tile — é o clique que promove aquela
+ * tela ao destaque.
+ */
+function ligarInteracao(slot, s) {
+  const sup = s.surface;
+  const noPalco = () => slot === activeSlot;
+
+  // Um por ponteiro: é o que permite reconhecer a pinça de dois dedos.
+  const pontos = new Map();
+  let arrasto = null;
+  let traco = null;
+  let pinca = null;
+  let laserEm = 0;
+
+  sup.dataset.f = ferramenta;
+
+  sup.addEventListener(
+    'wheel',
+    (e) => {
+      if (!noPalco()) return;
+      e.preventDefault();
+      // deltaMode 1 é linha e 2 é página: sem normalizar, um passo de roda no
+      // Firefox salta a escala inteira.
+      const passo = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
+      definirZoom(slot, s.zoom.z * Math.exp(-passo / 400), e.clientX, e.clientY);
+      bloquearClique();
+    },
+    { passive: false }
+  );
+
+  sup.addEventListener('pointerdown', (e) => {
+    if (!noPalco()) return;
+
+    pontos.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pontos.size === 2) return iniciarPinca();
+    if (pontos.size > 2) return;
+
+    // O botão do meio arrasta com qualquer ferramenta: é o reflexo de quem já
+    // usa mapa e editor de imagem, e evita ter que trocar de ferramenta para
+    // mexer a tela um dedo para o lado.
+    if (e.button === 1 || ferramenta === 'mover') {
+      // Sem zoom não há o que arrastar, e engolir o clique aqui tiraria de quem
+      // assiste o gesto de alternar a tela cheia.
+      if (s.zoom.z <= 1 && e.button !== 1) return;
+      e.preventDefault();
+      sup.setPointerCapture(e.pointerId);
+      interagindo = true;
+      arrasto = { x: e.clientX, y: e.clientY, tx: s.zoom.tx, ty: s.zoom.ty, moveu: false };
+      sup.classList.add('arrastando');
+      return;
+    }
+
+    if (e.button !== 0) return;
+    e.preventDefault();
+    bloquearClique();
+    sup.setPointerCapture(e.pointerId);
+    interagindo = true;
+
+    if (ferramenta === 'caneta') iniciarTraco(e);
+    else if (ferramenta === 'laser') apontar(e, true);
+  });
+
+  sup.addEventListener('pointermove', (e) => {
+    if (pontos.has(e.pointerId)) pontos.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinca) return moverPinca();
+    if (!noPalco()) return;
+
+    if (arrasto) {
+      const dx = e.clientX - arrasto.x;
+      const dy = e.clientY - arrasto.y;
+      // Três pixels separam um arrasto de um clique com a mão trêmula. Abaixo
+      // disso o gesto ainda é um clique, e clique no palco é tela cheia.
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) arrasto.moveu = true;
+      s.zoom.tx = arrasto.tx + dx;
+      s.zoom.ty = arrasto.ty + dy;
+      limitarPan(s);
+      aplicarZoom(slot);
+      return;
+    }
+
+    if (traco) return moverTraco(e);
+    // O laser segue o cursor sem precisar apertar nada: é ponteiro, não pincel.
+    if (ferramenta === 'laser') apontar(e);
+  });
+
+  for (const tipo of ['pointerup', 'pointercancel']) {
+    sup.addEventListener(tipo, (e) => {
+      pontos.delete(e.pointerId);
+
+      // O navegador entrega um `click` ao tile logo depois deste pointerup, e o
+      // tile alterna a tela cheia. Só um clique de verdade pode chegar lá: com
+      // ferramenta na mão, ou depois de arrastar, o clique é rastro do gesto.
+      //
+      // Bloquear no pointerdown não bastava: o bloqueio tem prazo, e um traço
+      // longo dura mais que ele — desenhar devagar entrava em tela cheia.
+      if (arrasto?.moveu || traco || pinca || ferramenta !== 'mover') bloquearClique();
+
+      if (pontos.size < 2) pinca = null;
+
+      if (arrasto) {
+        arrasto = null;
+        sup.classList.remove('arrastando');
+      }
+      if (traco) terminarTraco();
+      // Num toque, o dedo que sai é o ponteiro que sumiu — deixar o laser aceso
+      // marcaria a tela de todo mundo com um ponto parado.
+      if (ferramenta === 'laser' && e.pointerType !== 'mouse') emitir(slot, { k: 'po' });
+
+      if (pontos.size === 0) soltar();
+    });
+  }
+
+  sup.addEventListener('pointerleave', () => {
+    if (ferramenta === 'laser' && noPalco()) emitir(slot, { k: 'po' });
+  });
+
+  // Rede de segurança: soltar o botão fora da janela, o sistema roubar o
+  // ponteiro ou a aba perder o foco não disparam pointerup em toda parte, e um
+  // gesto que não termina prenderia a grade sem redesenhar para sempre.
+  sup.addEventListener('lostpointercapture', (e) => {
+    pontos.delete(e.pointerId);
+    if (pontos.size === 0) {
+      pinca = null;
+      arrasto = null;
+      sup.classList.remove('arrastando');
+      if (traco) terminarTraco();
+      soltar();
+    }
+  });
+
+  // Duplo clique zera a aproximação — o mesmo reflexo de qualquer mapa.
+  sup.addEventListener('dblclick', (e) => {
+    if (!noPalco() || ferramenta !== 'mover') return;
+    e.preventDefault();
+    bloquearClique();
+    zerarZoom(slot);
+  });
+
+  // ------------------------------------------------------------------ laser
+
+  function apontar(e, forcar = false) {
+    const t = performance.now();
+    // 25 por segundo: acima disso o olho não distingue e o teto do servidor
+    // começa a ficar perto.
+    if (!forcar && t - laserEm < 40) return;
+
+    const p = pontoDe(slot, e);
+    if (!p) return;
+    laserEm = t;
+    emitir(slot, { k: 'p', x: p.x, y: p.y, c: corCaneta });
+  }
+
+  // ----------------------------------------------------------------- caneta
+
+  function iniciarTraco(e) {
+    const p = pontoDe(slot, e);
+    if (!p?.dentro) return;
+    traco = { id: ++seqTraco, pendentes: [], ultimo: p, enviadoEm: performance.now() };
+    emitir(slot, { k: 's', id: traco.id, c: corCaneta, w: espessura, pts: [p.x, p.y] });
+  }
+
+  function moverTraco(e) {
+    const p = pontoDe(slot, e);
+    if (!p) return;
+
+    // Ponto que praticamente não andou só engorda o traço e o pacote. O limiar
+    // é na grade do vídeo, então vale igual com ou sem zoom.
+    if (Math.abs(p.x - traco.ultimo.x) < 4 && Math.abs(p.y - traco.ultimo.y) < 4) return;
+
+    traco.ultimo = p;
+    traco.pendentes.push(p.x, p.y);
+
+    // Agrupar pontos antes de enviar troca dezenas de mensagens minúsculas por
+    // algumas cheias, sem que a linha atrase o bastante para se notar.
+    if (traco.pendentes.length >= 12 || performance.now() - traco.enviadoEm > 60) descarregar();
+  }
+
+  function descarregar() {
+    while (traco?.pendentes.length) {
+      // 64 pares é o teto que o servidor aceita por mensagem.
+      emitir(slot, { k: 'a', id: traco.id, pts: traco.pendentes.splice(0, 128) });
+    }
+    if (traco) traco.enviadoEm = performance.now();
+  }
+
+  function terminarTraco() {
+    descarregar();
+    emitir(slot, { k: 'e', id: traco.id });
+    traco = null;
+  }
+
+  // ------------------------------------------------------------------ pinça
+
+  function iniciarPinca() {
+    if (traco) terminarTraco();
+    arrasto = null;
+    sup.classList.remove('arrastando');
+
+    const [a, b] = [...pontos.values()];
+    pinca = { d: distancia(a, b), z: s.zoom.z };
+  }
+
+  /** Fim do gesto: a grade que ficou esperando pode ser refeita agora. */
+  function soltar() {
+    interagindo = false;
+    if (renderPendente) renderGrid();
+  }
+
+  function moverPinca() {
+    const [a, b] = [...pontos.values()];
+    const d = distancia(a, b);
+    if (!pinca.d || !d) return;
+    definirZoom(slot, pinca.z * (d / pinca.d), (a.x + b.x) / 2, (a.y + b.y) / 2);
+    bloquearClique();
+  }
+}
+
+const distancia = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+
+// --------------------------------------------------------- barra do palco
+
+/**
+ * Ferramentas da tela em destaque.
+ *
+ * Flutua sobre o palco em vez de morar no dock de baixo: o que ela controla
+ * está ali, e um controle a uma tela de distância do que ele altera é um
+ * controle que ninguém acha.
+ */
+let barra = null;
+
+function buildFerramentas(slot) {
+  const el = document.createElement('div');
+  el.className = 'tools';
+  el.setAttribute('role', 'toolbar');
+  el.setAttribute('aria-label', 'Ferramentas da tela');
+
+  // Cliques daqui não podem chegar ao tile: lá embaixo eles alternariam a tela
+  // cheia a cada botão apertado.
+  el.addEventListener('click', (e) => e.stopPropagation());
+  el.addEventListener('pointerdown', (e) => e.stopPropagation());
+  el.addEventListener('dblclick', (e) => e.stopPropagation());
+  el.addEventListener('wheel', (e) => e.stopPropagation());
+
+  const botoes = {};
+  const criar = (nome, dica, svg, aoClicar, classe = 'tool') => {
+    const b = document.createElement('button');
+    b.className = classe;
+    b.dataset.tip = dica;
+    b.setAttribute('aria-label', dica);
+    b.innerHTML = svg;
+    b.addEventListener('click', aoClicar);
+    botoes[nome] = b;
+    return b;
+  };
+
+  el.append(
+    criar('mover', 'Mover e ampliar  ·  V', ICONES.mover, () => definirFerramenta('mover')),
+    criar('laser', 'Laser  ·  L', ICONES.laser, () => definirFerramenta('laser')),
+    criar('caneta', 'Desenhar  ·  C', ICONES.caneta, () => definirFerramenta('caneta'))
+  );
+
+  const cores = document.createElement('div');
+  cores.className = 'tool-cores';
+  const swatches = [];
+  for (const cor of CORES) {
+    const b = document.createElement('button');
+    b.className = 'cor';
+    b.style.setProperty('--cor', cor);
+    b.dataset.cor = cor;
+    b.dataset.tip = 'Cor do traço e do laser';
+    b.setAttribute('aria-label', `Cor ${cor}`);
+    b.addEventListener('click', () => {
+      corCaneta = cor;
+      store('annCor', cor);
+      sincronizarBarra();
+    });
+    swatches.push(b);
+    cores.append(b);
+  }
+
+  const grossuras = [];
+  for (const [nome, valor] of Object.entries(ESPESSURAS)) {
+    const b = document.createElement('button');
+    b.className = 'grossura';
+    b.dataset.esp = String(valor);
+    b.dataset.tip = `Traço ${nome}`;
+    b.setAttribute('aria-label', `Traço ${nome}`);
+    b.innerHTML = `<span style="height:${Math.max(2, Math.round(valor / 2.5))}px"></span>`;
+    b.addEventListener('click', () => {
+      espessura = valor;
+      store('annEsp', String(valor));
+      sincronizarBarra();
+    });
+    grossuras.push(b);
+    cores.append(b);
+  }
+
+  el.append(cores);
+  el.append(separador());
+
+  el.append(
+    criar('esconder', 'Esconder os desenhos  ·  O', ICONES.olho, () => alternarTracos()),
+    criar('desfazer', 'Desfazer meu último traço  ·  Ctrl+Z', ICONES.desfazer, () =>
+      emitir(slot, { k: 'u' })
+    ),
+    criar('apagar', 'Apagar tudo que eu desenhei', ICONES.apagar, () => emitir(slot, { k: 'c' })),
+    criar('apagarTudo', 'Limpar os desenhos de todo mundo', ICONES.apagarTudo, () =>
+      emitir(slot, { k: 'ca' })
+    )
+  );
+
+  // Só aparece onde o navegador tem PiP. Dentro do iframe da Activity o
+  // Discord pode negar a permissão, e um botão que só sabe dar erro é pior do
+  // que botão nenhum.
+  if (flutuarDisponivel()) {
+    el.append(
+      separador(),
+      criar(
+        'flutuar',
+        'Manter numa janela por cima de tudo',
+        ICONES.flutuar,
+        () => alternarFlutuante(slot)
+      )
+    );
+  }
+
+  el.append(separador());
+
+  const menos = criar('menos', 'Afastar  ·  −', ICONES.menos, () =>
+    definirZoom(slot, zoomAtual(slot) / 1.4)
+  );
+
+  const nivel = document.createElement('button');
+  nivel.className = 'tool tool-zoom';
+  nivel.dataset.tip = 'Voltar ao tamanho normal  ·  0';
+  nivel.addEventListener('click', () => zerarZoom(slot));
+
+  const mais = criar('mais', 'Aproximar  ·  +', ICONES.mais, () =>
+    definirZoom(slot, zoomAtual(slot) * 1.4)
+  );
+
+  el.append(menos, nivel, mais);
+
+  barra = { el, botoes, cores, swatches, grossuras, nivel };
+  sincronizarBarra();
+  return el;
+}
+
+function separador() {
+  const d = document.createElement('div');
+  d.className = 'tool-sep';
+  return d;
+}
+
+/**
+ * Espelha ferramenta, cor, espessura, visibilidade e zoom na barra.
+ *
+ * A guarda é por existir, e não por estar no DOM. `buildFerramentas` chama isto
+ * antes de anexar a barra ao tile — era o que fazia o estado inicial nunca ser
+ * aplicado: a paleta aparecia sem a caneta escolhida, "mover" não vinha
+ * marcado, e o olho abria dizendo o contrário do que estava valendo. Escrever
+ * num nó ainda solto é inofensivo; não escrever é o bug.
+ */
+function sincronizarBarra() {
+  if (!barra) return;
+
+  for (const nome of ['mover', 'laser', 'caneta']) {
+    barra.botoes[nome].classList.toggle('ativo', ferramenta === nome);
+  }
+
+  // Cor e espessura só aparecem com a caneta escolhida: com o laser elas
+  // mudariam só a cor do ponto, e com a mão nenhuma delas faz nada.
+  barra.cores.hidden = ferramenta !== 'caneta';
+  for (const b of barra.swatches) b.classList.toggle('ativa', b.dataset.cor === corCaneta);
+  for (const b of barra.grossuras) {
+    b.classList.toggle('ativa', Number(b.dataset.esp) === espessura);
+  }
+
+  // O olho fechado diz "está escondido"; o aberto, "clique para esconder". O
+  // rótulo troca junto, senão o leitor de tela anunciaria sempre a mesma coisa.
+  barra.botoes.esconder.classList.toggle('ativo', esconderTracos);
+  barra.botoes.esconder.innerHTML = esconderTracos ? ICONES.olhoCortado : ICONES.olho;
+  const rotuloOlho = esconderTracos
+    ? 'Mostrar os desenhos de novo  ·  O'
+    : 'Esconder os desenhos, só para mim  ·  O';
+  barra.botoes.esconder.dataset.tip = rotuloOlho;
+  barra.botoes.esconder.setAttribute('aria-label', rotuloOlho);
+
+  barra.botoes.apagarTudo.hidden = !podeLimparTudo();
+  // O mesmo botão abre e fecha, e precisa dizer qual dos dois vai fazer.
+  const flutuando = Boolean(activeSlot !== null && streams.get(activeSlot)?.flutuante);
+  if (barra.botoes.flutuar) {
+    barra.botoes.flutuar.classList.toggle('ativo', flutuando);
+    const rotulo = flutuando ? 'Fechar a janela flutuante' : 'Manter numa janela por cima de tudo';
+    barra.botoes.flutuar.dataset.tip = rotulo;
+    barra.botoes.flutuar.setAttribute('aria-label', rotulo);
+  }
+  mostrarZoom();
+}
+
+/**
+ * A barra some quase toda quando não está em uso — a tela é o que importa —, e
+ * fica firme enquanto houver ferramenta escolhida ou aproximação aplicada.
+ */
+function firmarBarra() {
+  barra?.el.classList.toggle(
+    'fixa',
+    ferramenta !== 'mover' || zoomAtual(activeSlot) > 1 || esconderTracos
+  );
+}
+
+function mostrarZoom() {
+  if (!barra || activeSlot === null) return;
+  const z = zoomAtual(activeSlot);
+  barra.nivel.textContent = `${Math.round(z * 100)}%`;
+  barra.nivel.classList.toggle('ativo', z > 1);
+  firmarBarra();
+}
+
+const ICONES = {
+  mover:
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 3.2 11 19.5l2.1-6.4 6.4-2.1z"/></svg>',
+  laser:
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/>' +
+    '<path d="M12 3v2.4M12 18.6V21M3 12h2.4M18.6 12H21M5.6 5.6l1.7 1.7M16.7 16.7l1.7 1.7M18.4 5.6l-1.7 1.7M7.3 16.7l-1.7 1.7"/></svg>',
+  caneta:
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20.5l1.2-4.2L15.6 5.9a2 2 0 0 1 2.8 0l1.7 1.7a2 2 0 0 1 0 2.8L9.7 20.8z"/>' +
+    '<path d="M14.2 7.3l4.5 4.5"/></svg>',
+  desfazer:
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 14.5 4 10l4.5-4.5"/>' +
+    '<path d="M4 10h10.5a5.5 5.5 0 0 1 0 11H10"/></svg>',
+  apagar:
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 20.5H21"/>' +
+    '<path d="M14.8 4.6 3.9 15.5a2 2 0 0 0 0 2.8l2.2 2.2h4.6l9.4-9.4a2 2 0 0 0 0-2.8l-2.5-2.5a2 2 0 0 0-2.8 0z"/>' +
+    '<path d="M10.6 8.8l5.3 5.3"/></svg>',
+  apagarTudo:
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M9.5 7V4.8h5V7"/>' +
+    '<path d="M6.2 7l1 12.2h9.6L18 7"/><path d="M10.5 10.6v5.6M13.5 10.6v5.6"/></svg>',
+  menos:
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/>' +
+    '<path d="M7.5 10.5h6M20 20l-4.8-4.8"/></svg>',
+  mais:
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/>' +
+    '<path d="M7.5 10.5h6M10.5 7.5v6M20 20l-4.8-4.8"/></svg>',
+  flutuar:
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="4" width="19" height="14" rx="2"/>' +
+    '<rect x="12" y="11" width="8.5" height="6.5" rx="1.2"/></svg>',
+  olho:
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.7-6.4 10-6.4S22 12 22 12s-3.7 6.4-10 6.4S2 12 2 12z"/>' +
+    '<circle cx="12" cy="12" r="2.8"/></svg>',
+  olhoCortado:
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.7 6.2A10.6 10.6 0 0 1 12 6.1c6.3 0 10 5.9 10 5.9a19 19 0 0 1-3 3.7"/>' +
+    '<path d="M6.8 7.9A18.6 18.6 0 0 0 2 12s3.7 5.9 10 5.9a10 10 0 0 0 3.4-.6"/>' +
+    '<path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/><path d="M3.2 3.2l17.6 17.6"/></svg>',
+};
+
 // ------------------------------------------------------------------- streams
 
-/** Prepara o lugar do transmissor; o decoder só nasce quando o config chega. */
+/**
+ * Prepara o lugar do transmissor; o decoder só nasce quando o config chega.
+ *
+ * A superfície empacota o vídeo e a camada de anotações num nó só, que é o que
+ * passeia entre os tiles. Ela existe porque as duas precisam andar juntas e
+ * ficar recortadas pela mesma borda quando a imagem está ampliada.
+ *
+ * A camada de anotações é um canvas separado, e não um desenho por cima do
+ * mesmo canvas do vídeo: o decoder repinta o quadro inteiro dezenas de vezes
+ * por segundo, e qualquer traço feito ali sumiria no quadro seguinte.
+ *
+ * Ela também fica de fora do zoom, de propósito. O canvas do vídeo é ampliado
+ * pelo navegador; a camada é redesenhada na resolução da tela a cada mudança —
+ * é isso que mantém a linha nítida com dez vezes de aproximação.
+ */
 function openStream(slot, userId) {
   closeStream(slot);
 
   const canvas = document.createElement('canvas');
+  const s = montarSuperficie(slot, userId, canvas, () => ({
+    w: canvas.width,
+    h: canvas.height,
+  }));
+
+  s.player = createPlayer(canvas, {
+    onError: (m) => toast(m, true),
+    onTamanho: () => {
+      s.started = true;
+      renderGrid();
+    },
+  });
+
+  streams.set(slot, s);
+  ligarInteracao(slot, s);
+}
+
+/**
+ * A parte que as duas origens de imagem têm em comum.
+ *
+ * São duas: o canvas que o decodificador pinta, para quem assiste, e o <video>
+ * ligado direto na captura, para quem transmite daqui. Da superfície para fora
+ * elas são a mesma coisa — mesmo zoom, mesma camada de anotação, mesmo tile —,
+ * e o que as diferencia é só de onde sai o tamanho da imagem. Daí `dim` vir de
+ * fora: `canvas.width` e `video.videoWidth` são a mesma pergunta com dois
+ * nomes, e é a única pergunta que o resto do arquivo precisa fazer.
+ */
+function montarSuperficie(slot, userId, midia, dim) {
+  midia.className = 'video';
+
+  const overlay = document.createElement('canvas');
+  overlay.className = 'ann';
+
+  const surface = document.createElement('div');
+  surface.className = 'surface';
+  surface.append(midia, overlay);
+
   const s = {
     userId,
-    canvas,
+    midia,
+    dim,
+    overlay,
+    surface,
     // Vira true no primeiro quadro desenhado. Até lá o tile mostra "Conectando…"
     // em vez de uma caixa preta que não se distingue de um travamento.
     started: false,
-    player: createPlayer(canvas, {
-      onError: (m) => toast(m, true),
-      onTamanho: () => {
-        s.started = true;
-        renderGrid();
-      },
-    }),
+    // Aproximação de quem assiste, não da transmissão: cada pessoa amplia o
+    // canto que quiser sem mexer no que os outros veem.
+    zoom: { z: 1, tx: 0, ty: 0 },
+    player: null,
     // Só nasce quando a transmissão anuncia que tem som — nem toda tem.
     audio: null,
+    // Janela flutuante desta tela, quando alguém a abriu.
+    flutuante: null,
+    // Prévia da própria captura, e não algo que veio pela rede.
+    local: false,
   };
 
+  s.ann = criarCamada(overlay, { vista: () => vistaDe(slot) });
+  s.ann.mostrar(!esconderTracos);
+
+  // A caixa muda de tamanho ao arrastar o divisor, ao entrar em tela cheia e ao
+  // redimensionar a janela — e nenhum desses caminhos passa por renderGrid.
+  s.observer = new ResizeObserver(() => {
+    limitarPan(s);
+    aplicarZoom(slot);
+  });
+  s.observer.observe(surface);
+
+  return s;
+}
+
+/**
+ * A própria tela, para quem está transmitindo.
+ *
+ * Quem compartilha era o único que não via o que desenhavam na tela dele. Dava
+ * para pedir "assistir a própria transmissão", mas isso é codificar, subir,
+ * baixar e decodificar uma imagem que já está aqui — banda e meio segundo de
+ * atraso para ver um traço por cima do que já está na tela.
+ *
+ * O <video> pendura a captura direto na origem: sem rede, sem atraso, e a
+ * camada de anotação por cima é a mesma que todo mundo está vendo.
+ */
+function abrirPreviaLocal(slot) {
+  closeStream(slot);
+
+  const video = document.createElement('video');
+  // Mudo por construção: é o som desta máquina saindo dela de novo, e o eco
+  // apareceria antes mesmo de alguém entrar na sala.
+  video.muted = true;
+  video.playsInline = true;
+  video.autoplay = true;
+  video.srcObject = meuStream;
+  video.play().catch(() => {});
+
+  const s = montarSuperficie(slot, session?.user?.id, video, () => ({
+    w: video.videoWidth,
+    h: video.videoHeight,
+  }));
+  s.local = true;
+
+  // O tamanho da captura só se conhece depois dos metadados, e muda sozinho
+  // quando a janela capturada é redimensionada — as duas coisas mudam a forma
+  // do palco e a conta que posiciona os traços.
+  video.addEventListener('loadedmetadata', () => {
+    s.started = true;
+    renderGrid();
+  });
+  video.addEventListener('resize', () => {
+    limitarPan(s);
+    aplicarZoom(slot);
+    renderGrid();
+  });
+
   streams.set(slot, s);
+  ligarInteracao(slot, s);
 }
 
 /** Liga o som desta transmissão. Chamado quando a config de áudio chega. */
@@ -803,7 +1753,17 @@ function startAudio(slot, config) {
 
 function startStream(slot, config) {
   const s = streams.get(slot);
-  if (!s || !s.player.start(config)) return;
+  if (!s) return;
+
+  // O servidor reenvia a config a cada pedido de assistir, e o transmissor a
+  // reenvia sempre que a resolução muda. Reconfigurar o decoder com a mesma
+  // config custa um keyframe e um piscar de tela à toa.
+  const chave = JSON.stringify(config);
+  if (s.configKey === chave) return;
+
+  if (!s.player?.start(config)) return;
+  s.configKey = chave;
+
   renderGrid();
   renderBar();
   ensureStatsTimer();
@@ -812,9 +1772,14 @@ function startStream(slot, config) {
 function closeStream(slot) {
   const s = streams.get(slot);
   if (!s) return;
-  s.player.stop();
+  s.player?.stop();
   s.audio?.stop();
-  s.canvas.remove();
+  s.flutuante?.parar();
+  s.ann.parar();
+  s.observer.disconnect();
+  // Sem soltar a origem, o <video> segura a captura viva depois do tile sumir.
+  if (s.local) s.midia.srcObject = null;
+  s.surface.remove();
   streams.delete(slot);
   // Quem estava no palco saiu: renderGrid escolhe a próxima na próxima passada.
   if (activeSlot === slot) activeSlot = null;
@@ -847,7 +1812,10 @@ function closeAllStreams() {
 function ensureStatsTimer() {
   if (lagTimer) return;
   lagTimer = setInterval(() => {
-    const s = streams.get(activeSlot) ?? streams.values().next().value;
+    // Prévia local não tem número nenhum a mostrar: a imagem não veio pela
+    // rede, então latência, quadros recebidos e resolução decodificada não
+    // existem para ela.
+    const s = [streams.get(activeSlot), ...streams.values()].find((x) => x?.player);
     if (!s) return;
     $('pLag').textContent = `${Math.max(0, s.player.getLag())} ms`;
     $('pFps').textContent = `${s.player.takeFrameCount()} fps`;
@@ -1184,7 +2152,8 @@ function askPassword(room, error) {
   $('joinError').textContent = error ?? '';
   $('joinError').hidden = !error;
   if (!error) $('joinPass').value = '';
-  $('joinModal').hidden = false;
+  $('joinModal').hidden = false;
+
   $('joinPass').focus();
 }
 
@@ -1459,7 +2428,7 @@ function connect() {
       const s = streams.get(view.getUint8(0));
       if (!s) return;
       if (view.getUint8(1) === 3) s.audio?.push(e.data);
-      else s.player.push(e.data);
+      else s.player?.push(e.data);
       return;
     }
 
@@ -1491,14 +2460,28 @@ function connect() {
       available.set(msg.slot, { userId: msg.userId, config: null });
       watching.delete(msg.slot);
       closeStream(msg.slot);
+      // A transmissão que acabou de ser anunciada pode ser a minha, e é aqui
+      // que o slot dela passa a existir.
+      garantirPreviaLocal();
       renderGrid();
     } else if (msg.type === 'config') {
       const info = available.get(msg.slot);
       if (info) info.config = msg.config;
       if (watching.has(msg.slot)) {
-        openStream(msg.slot, info?.userId ?? msg.slot);
+        // Recriar o stream aqui apagaria os desenhos que já estão na tela — e a
+        // config vem de novo toda vez que a resolução da fonte muda, o que
+        // acontece só de a pessoa arrastar a janela para outro monitor. Quando
+        // já existe, basta reconfigurar o decoder.
+        if (!streams.has(msg.slot)) openStream(msg.slot, info?.userId ?? msg.slot);
         startStream(msg.slot, msg.config);
       }
+    } else if (msg.type === 'ann') {
+      // O meu já foi desenhado no eco local; redesenhar a volta do servidor
+      // duplicaria o traço no primeiro pacote reordenado.
+      if (msg.uid !== session?.user?.id) anotarEm(msg.slot, msg);
+    } else if (msg.type === 'ann-sync') {
+      // Estado de quem chegou no meio: o que já está desenhado na tela.
+      sincronizarAnn(msg.slot, msg.tracos);
     } else if (msg.type === 'audio-config') {
       // Pode chegar antes de eu pedir para assistir; aí não há o que ligar, e
       // o servidor reenvia assim que o pedido chegar.
@@ -1580,6 +2563,8 @@ function iAmBroadcasting() {
 function stopMyBroadcast() {
   myBroadcast?.stop();
   myBroadcast = null;
+  fecharPreviaLocal();
+  meuStream = null;
   if (participants.some((p) => p.broadcasting && p.id === session?.user?.id)) {
     ws?.send(JSON.stringify({ type: 'stop-broadcast' }));
   }
@@ -1626,7 +2611,8 @@ function openModal(mode) {
     $('mFps').value = String(s.fps);
   }
 
-  $('modal').hidden = false;
+  $('modal').hidden = false;
+
 }
 
 $('liveSettings').addEventListener('click', () => openModal('live'));
@@ -1661,7 +2647,16 @@ $('volume').addEventListener('input', (e) => setVolume(Number(e.target.value) / 
 $('modalSwap').addEventListener('click', async () => {
   if (!myBroadcast) return;
   try {
-    await myBroadcast.changeScreen();
+    meuStream = await myBroadcast.changeScreen();
+    // Trocar a origem, e não refazer a prévia: assim a aproximação e o que
+    // estiver desenhado sobrevivem à troca de tela.
+    const previa = [...streams.values()].find((x) => x.local);
+    if (previa) {
+      previa.midia.srcObject = meuStream;
+      previa.midia.play().catch(() => {});
+    } else {
+      garantirPreviaLocal();
+    }
     closeModal();
   } catch (err) {
     // Cancelar o seletor é rotina, não erro.
@@ -1714,16 +2709,23 @@ async function broadcastFromHere() {
     fps: Number($('mFps').value),
     audio: $('mAudio').checked,
     onAviso: (m) => toast(m, true),
+    // O socket de quem transmite recebe o que desenham na tela dele: é assim
+    // que o traço chega em quem está compartilhando, sem ele assistir a si.
+    onAnn: anotarNaPrevia,
     onEnd: () => {
       myBroadcast = null;
+      fecharPreviaLocal();
+      meuStream = null;
+      renderGrid();
       renderBar();
     },
   });
 
   const startedAt = performance.now();
   try {
-    await b.start();
+    meuStream = await b.start();
     myBroadcast = b;
+    garantirPreviaLocal();
     closeModal();
     renderBar();
     return true;
@@ -1792,7 +2794,8 @@ $('newRoom').addEventListener('click', () => {
   if (!session) return;
   $('createName').value = '';
   $('createPass').value = '';
-  $('createModal').hidden = false;
+  $('createModal').hidden = false;
+
   $('createName').focus();
 });
 
@@ -1859,7 +2862,8 @@ $('roomSave').addEventListener('click', async () => {
 function openRoomSettings() {
   $('roomSub').textContent = roomInfo?.name ?? '';
   $('roomPass').value = '';
-  $('roomModal').hidden = false;
+  $('roomModal').hidden = false;
+
   $('roomPass').focus();
 }
 
@@ -1897,6 +2901,58 @@ window.addEventListener('keydown', (e) => {
     telaCheia = false;
     renderGrid();
   }
+});
+
+/**
+ * Atalhos das ferramentas do palco.
+ *
+ * Uma tecla só para cada coisa que se faz com a mão ocupada segurando o mouse.
+ * Ficam de fora quando há campo em foco ou modal aberto: `c` de caneta não pode
+ * roubar um `c` digitado numa senha.
+ */
+window.addEventListener('keydown', (e) => {
+  if (!inRoom() || activeSlot === null || e.altKey || e.metaKey) return;
+  if (e.target instanceof Element && e.target.closest('input, select, textarea, [contenteditable]')) {
+    return;
+  }
+  if (document.querySelector('.modal:not([hidden])')) return;
+
+  if (e.ctrlKey) {
+    if (e.key.toLowerCase() === 'z') {
+      e.preventDefault();
+      emitir(activeSlot, { k: 'u' });
+    }
+    return;
+  }
+
+  switch (e.key.toLowerCase()) {
+    case 'v':
+      definirFerramenta('mover');
+      break;
+    case 'l':
+      definirFerramenta('laser');
+      break;
+    case 'c':
+      definirFerramenta('caneta');
+      break;
+    case 'o':
+      alternarTracos();
+      break;
+    case '+':
+    case '=':
+      definirZoom(activeSlot, zoomAtual(activeSlot) * 1.4);
+      break;
+    case '-':
+    case '_':
+      definirZoom(activeSlot, zoomAtual(activeSlot) / 1.4);
+      break;
+    case '0':
+      zerarZoom();
+      break;
+    default:
+      return;
+  }
+  e.preventDefault();
 });
 
 /**

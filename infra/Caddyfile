@@ -12,7 +12,7 @@ discordbr.live {
 	# O relay do WebSocket passa por aqui igual ao HTTP — o Caddy detecta o
 	# upgrade sozinho. Não comprima: o que viaja no socket já é vídeo
 	# codificado, e comprimir de novo só gasta CPU.
-	reverse_proxy 127.0.0.1:3001
+	reverse_proxy 127.0.0.1:31415
 
 	encode zstd gzip
 
