@@ -842,3 +842,154 @@ describe('adminStats', () => {
     expect(R.adminStats().traffic.receivedBytes).toBeGreaterThan(0);
   });
 });
+
+/**
+ * Sinalização WebRTC e a chave que ela abre e fecha no relay.
+ *
+ * O que importa aqui não é a negociação em si — o servidor não abre o envelope
+ * e não teria como validá-lo. É o efeito colateral dela: enquanto a conexão
+ * direta entrega, o relay não pode mandar os mesmos bytes de novo, e no instante
+ * em que ela cai eles precisam voltar sem que ninguém peça nada.
+ */
+describe('WebRTC', () => {
+  it('convida o transmissor a abrir conexão direta quando alguém começa a assistir', () => {
+    const { room, viewer } = salaComEspectador();
+    const ws = socket();
+    const entry = R.attachBroadcaster(room, ws, pessoa('transmissor'));
+    R.startStream(room, entry);
+    ws.limpar();
+
+    R.watch(room, viewer, entry.slot);
+
+    const convite = ws.mensagens().find((m) => m.type === 'rtc-want');
+    expect(convite).toBeTruthy();
+    expect(typeof convite.peer).toBe('string');
+  });
+
+  it('repassa o envelope do espectador ao transmissor sem abrir', () => {
+    const { room, viewer, ws, entry } = comTransmissao();
+    const payload = { kind: 'answer', sdp: { type: 'answer', sdp: 'v=0...' } };
+
+    R.rtcParaBroadcaster(room, viewer, entry.slot, payload);
+
+    const msg = ws.mensagens().find((m) => m.type === 'rtc');
+    expect(msg.payload).toEqual(payload);
+    expect(msg.peer).toBe(viewer.__peerId);
+  });
+
+  it('repassa o envelope do transmissor ao espectador nomeado', () => {
+    const { room, viewer, entry } = comTransmissao();
+    const payload = { kind: 'ice', candidate: { candidate: 'candidate:1 ...' } };
+
+    R.rtcParaViewer(room, entry, viewer.__peerId, payload);
+
+    const msg = viewer.mensagens().find((m) => m.type === 'rtc');
+    expect(msg.slot).toBe(entry.slot);
+    expect(msg.payload).toEqual(payload);
+  });
+
+  it('ignora envelope endereçado a quem não está na sala', () => {
+    const { room, viewer, entry } = comTransmissao();
+
+    R.rtcParaViewer(room, entry, 'ninguem', { kind: 'ice' });
+
+    expect(viewer.mensagens().some((m) => m.type === 'rtc')).toBe(false);
+  });
+
+  it('para de enviar quadros a quem assumiu a conexão direta', () => {
+    const { room, viewer, entry } = comTransmissao();
+    R.pushChunk(room, entry, quadro(entry.slot, KEYFRAME));
+    expect(viewer.binarios()).toHaveLength(1);
+
+    R.rtcAtivo(room, viewer, entry.slot, true);
+    viewer.limpar();
+
+    R.pushChunk(room, entry, quadro(entry.slot, KEYFRAME));
+    R.pushChunk(room, entry, quadro(entry.slot, DELTA));
+    R.pushChunk(room, entry, quadro(entry.slot, AUDIO));
+
+    expect(viewer.binarios()).toHaveLength(0);
+  });
+
+  it('volta a enviar quadros, com keyframe novo, quando a conexão direta cai', () => {
+    const { room, viewer, ws, entry } = comTransmissao();
+    R.rtcAtivo(room, viewer, entry.slot, true);
+    ws.limpar();
+    viewer.limpar();
+
+    R.rtcAtivo(room, viewer, entry.slot, false);
+
+    // Sem keyframe o decodificador dele descartaria tudo até o periódico.
+    expect(ws.tipos()).toContain('need-keyframe');
+
+    R.pushChunk(room, entry, quadro(entry.slot, KEYFRAME));
+    expect(viewer.binarios()).toHaveLength(1);
+  });
+
+  it('desliga o relay na origem quando ninguém mais depende dele', () => {
+    const { room, viewer, ws, entry } = comTransmissao();
+    ws.limpar();
+
+    R.rtcAtivo(room, viewer, entry.slot, true);
+
+    expect(ws.mensagens().find((m) => m.type === 'chunks')).toEqual({
+      type: 'chunks',
+      on: false,
+    });
+  });
+
+  it('religa o relay quando um segundo espectador entra sem conexão direta', () => {
+    const { room, viewer, ws, entry } = comTransmissao();
+    R.rtcAtivo(room, viewer, entry.slot, true);
+    ws.limpar();
+
+    const outro = socket();
+    R.attachViewer(room, outro, pessoa('outro'));
+    R.watch(room, outro, entry.slot);
+
+    expect(ws.mensagens().find((m) => m.type === 'chunks')).toEqual({ type: 'chunks', on: true });
+
+    R.pushChunk(room, entry, quadro(entry.slot, KEYFRAME));
+    expect(outro.binarios()).toHaveLength(1);
+    expect(viewer.binarios()).toHaveLength(0);
+  });
+
+  it('não repete o mesmo recado a cada entrada e saída', () => {
+    const { room, viewer, ws, entry } = comTransmissao();
+    ws.limpar();
+
+    R.rtcAtivo(room, viewer, entry.slot, true);
+    R.rtcAtivo(room, viewer, entry.slot, true);
+
+    expect(ws.mensagens().filter((m) => m.type === 'chunks')).toHaveLength(1);
+  });
+
+  it('avisa o transmissor e religa o relay quando o espectador some', () => {
+    const { room, viewer, ws, entry } = comTransmissao();
+    R.rtcAtivo(room, viewer, entry.slot, true);
+    ws.limpar();
+
+    R.detachViewer(room, viewer);
+
+    expect(ws.tipos()).toContain('rtc-bye');
+    // Ninguém assiste mais: religar o relay agora seria alimentar o vazio.
+    expect(ws.mensagens().some((m) => m.type === 'chunks' && m.on)).toBe(false);
+  });
+
+  it('esquece a conexão direta quando a transmissão termina', () => {
+    const { room, viewer, entry } = comTransmissao();
+    R.rtcAtivo(room, viewer, entry.slot, true);
+
+    R.stopStream(room, entry);
+
+    expect(viewer.__rtc.has(entry.slot)).toBe(false);
+  });
+
+  it('ignora quem diz ter conexão direta com um slot que não pediu', () => {
+    const { room, viewer, entry } = comTransmissao({ assistindo: false });
+
+    R.rtcAtivo(room, viewer, entry.slot, true);
+
+    expect(viewer.__rtc.has(entry.slot)).toBe(false);
+  });
+});

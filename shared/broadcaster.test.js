@@ -470,6 +470,50 @@ describe('start', () => {
     expect(encoder.configuracoes[0]).not.toHaveProperty('latencyMode');
   });
 
+  it('abre mão do bitrate constante antes de abrir mão do codec', async () => {
+    // O caso real: o encoder de hardware do H.264 recusa CBR neste driver, e o
+    // VP8 por software aceita. Escolher pelo CBR trocaria o chip de vídeo pela
+    // CPU, e VP8 em 1080p por software não faz 30 fps.
+    VideoEncoderFalso.isConfigSupported.mockImplementation(async (config) => ({
+      supported:
+        config.codec === 'vp8' ||
+        (config.codec === 'avc1.42E01E' && config.bitrateMode === undefined),
+    }));
+
+    const { encoder } = await noAr();
+
+    expect(encoder.configuracoes[0].codec).toBe('avc1.42E01E');
+    expect(encoder.configuracoes[0]).not.toHaveProperty('bitrateMode');
+  });
+
+  it('pede bitrate constante quando o codec preferido aceita', async () => {
+    // Explícito de propósito: `mockClear` no beforeEach limpa as chamadas, não
+    // a implementação, e o teste anterior deixaria a dele valendo aqui.
+    VideoEncoderFalso.isConfigSupported.mockImplementation(async () => ({ supported: true }));
+
+    const { encoder } = await noAr();
+
+    expect(encoder.configuracoes[0]).toMatchObject({
+      codec: 'avc1.42E01E',
+      bitrateMode: 'constant',
+      latencyMode: 'realtime',
+    });
+  });
+
+  it('mantém o tempo real acima do bitrate constante dentro do mesmo codec', async () => {
+    VideoEncoderFalso.isConfigSupported.mockImplementation(async (config) => ({
+      supported:
+        config.codec === 'avc1.42E01E' &&
+        Boolean(config.avc) &&
+        !(config.latencyMode === 'realtime' && config.bitrateMode === 'constant'),
+    }));
+
+    const { encoder } = await noAr();
+
+    expect(encoder.configuracoes[0].latencyMode).toBe('realtime');
+    expect(encoder.configuracoes[0]).not.toHaveProperty('bitrateMode');
+  });
+
   it('encerra quando a pessoa para o compartilhamento pelo navegador', async () => {
     const onEnd = vi.fn();
     const { b, stream } = await noAr({ onEnd });

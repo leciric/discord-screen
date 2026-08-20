@@ -161,7 +161,11 @@ describe('a composição', () => {
   it('desenha a imagem e, por cima dela, os traços', async () => {
     const img = fonteDe();
     const f = criarFlutuante({ fonte: () => img, dim: () => ({ w: 1920, h: 1080 }) });
-    f.aplicar({ uid: 'a', name: 'A', ev: { k: 's', id: 1, c: '#ff0000', w: 10, pts: [0, 0, 100, 100, 200, 200] } });
+    f.aplicar({
+      uid: 'a',
+      name: 'A',
+      ev: { k: 's', id: 1, c: '#ff0000', w: 10, pts: [0, 0, 100, 100, 200, 200] },
+    });
 
     await f.abrir();
     vi.advanceTimersByTime(120);
@@ -215,7 +219,9 @@ describe('a composição', () => {
   it('esconder os traços vale também aqui', async () => {
     const img = fonteDe();
     const f = criarFlutuante({ fonte: () => img, dim: () => ({ w: 1920, h: 1080 }) });
-    f.sincronizar([{ id: 'a:1', uid: 'a', name: 'A', color: '#f00', width: 10, pts: [0, 0, 50, 50, 90, 90] }]);
+    f.sincronizar([
+      { id: 'a:1', uid: 'a', name: 'A', color: '#f00', width: 10, pts: [0, 0, 50, 50, 90, 90] },
+    ]);
 
     await f.abrir();
     vi.advanceTimersByTime(120);

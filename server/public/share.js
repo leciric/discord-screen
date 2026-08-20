@@ -31,22 +31,67 @@ const FONTES = ['tela', 'camera'];
 const TITULO = document.title;
 
 /**
- * As opções da transmissão, decididas na engrenagem da atividade.
+ * As opções da transmissão.
  *
- * Chegam pela URL quando esta aba é aberta e podem ser trocadas depois, pelo
- * `start-request` — a aba costuma estar aberta desde antes da última mexida.
- * Não há controle aqui: dois lugares para a mesma escolha significam um deles
- * desatualizado, e o que fica velho é sempre o que não foi usado por último.
+ * Esta página é o lugar delas. Chegam pela URL quando a aba é aberta, podem
+ * ser trocadas pelo `start-request` — a aba costuma estar aberta desde antes
+ * da última mexida — e são editáveis aqui, que é onde quem transmite está
+ * quando percebe que a imagem está pesada demais para a conexão.
+ *
+ * A escolha fica guardada no navegador: quem baixou a qualidade uma vez não
+ * quer descobrir de novo, na próxima transmissão, que precisava baixar.
  */
+const GUARDADAS = 'opcoesTransmissao';
+
+function guardadas() {
+  try {
+    return JSON.parse(localStorage.getItem(GUARDADAS) ?? '{}');
+  } catch {
+    return {};
+  }
+}
+
+const salvas = guardadas();
 const opcoes = {
-  bitrate: Number(query.get('q')) || 2_500_000,
-  fps: Number(query.get('fps')) || 30,
+  // A URL vence o que está guardado: ela carrega a intenção desta abertura.
+  bitrate: Number(query.get('q')) || Number(salvas.bitrate) || 2_500_000,
+  fps: Number(query.get('fps')) || Number(salvas.fps) || 30,
 };
+
+function guardar() {
+  try {
+    localStorage.setItem(GUARDADAS, JSON.stringify(opcoes));
+  } catch {
+    /* navegação privada: vale só para esta sessão */
+  }
+}
+
+function espelharOpcoes() {
+  $('qualidade').value = String(opcoes.bitrate);
+  $('quadros').value = String(opcoes.fps);
+}
 
 function aplicarOpcoes(novas) {
   if (!novas) return;
   if (Number(novas.q)) opcoes.bitrate = Number(novas.q);
   if (Number(novas.fps)) opcoes.fps = Number(novas.fps);
+  // Os selects seguem o valor efetivo: mostrar 5 Mbps enquanto se transmite a
+  // 1 Mbps é pior do que não mostrar nada.
+  espelharOpcoes();
+}
+
+/**
+ * Troca aplicada na hora, sem derrubar quem assiste.
+ *
+ * O setQuality reconfigura o encoder e pede a taxa nova à própria captura, então
+ * quem está no ar vê a mudança sem reconexão. Fora do ar, só fica guardado para
+ * a próxima.
+ */
+function mudarOpcao(chave, valor) {
+  if (!Number(valor)) return;
+  opcoes[chave] = Number(valor);
+  guardar();
+  for (const painel of Object.values(paineis)) painel?.aplicarQualidade?.();
 }
 
 const paineis = {};
@@ -654,6 +699,10 @@ $('somAba').addEventListener('click', async () => {
     if (err.name !== 'NotAllowedError') paineis.tela.setStatus(err.message, 'error');
   }
 });
+
+espelharOpcoes();
+$('qualidade').addEventListener('change', (e) => mudarOpcao('bitrate', e.target.value));
+$('quadros').addEventListener('change', (e) => mudarOpcao('fps', e.target.value));
 
 window.addEventListener('beforeunload', () => {
   for (const f of FONTES) paineis[f]?.parar();

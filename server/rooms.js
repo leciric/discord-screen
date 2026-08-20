@@ -21,12 +21,20 @@ const MAX_BROADCASTERS = 4;
 // então duas pessoas com as duas fontes já lotam.
 const MAX_POR_PESSOA = 2;
 
+// Identidade de espectador na sinalização WebRTC. O transmissor precisa de um
+// nome para endereçar cada conexão direta, e o id do usuário não serve: a mesma
+// pessoa pode ter duas abas assistindo, e cada aba é uma conexão diferente.
+let proximoPeerId = 1;
+
 /** As fontes que uma transmissão pode ter. */
 export const FONTES = new Set(['tela', 'camera']);
 // Sala é objeto em memória criado por qualquer pessoa autenticada: sem teto,
 // um laço de "criar sala" consome a RAM do processo.
 const MAX_ROOMS_PER_INSTANCE = 20;
 const MAX_BUFFERED_BYTES = 2 * 1024 * 1024;
+
+// Intervalo mínimo entre dois pedidos de keyframe para a mesma transmissão.
+const KEYFRAME_ASK_EVERY_MS = 1000;
 const MAX_NAME = 32;
 const MAX_ROOM_NAME = 40;
 
@@ -585,7 +593,24 @@ export function broadcastState(room) {
   for (const e of room.broadcasters.values()) send(e.ws, msg);
 }
 
-function requestKeyframe(entry) {
+/**
+ * Pede um ponto de partida novo ao transmissor, no máximo um por segundo.
+ *
+ * O limite não é economia: keyframe é o quadro mais caro que existe, e quem
+ * pede é justamente quem já está com a conexão apertada. Sem o intervalo, dez
+ * espectadores em apuros virariam dez keyframes seguidos — o remédio entupindo
+ * o cano que ele deveria desentupir. Um serve todos, porque o transmissor manda
+ * para a sala inteira.
+ */
+function requestKeyframe(entry, { urgente = false } = {}) {
+  const agora = Date.now();
+  // A pressa é para quem ficou sem nenhuma imagem, e não para quem está com a
+  // conexão apertada: voltar da conexão direta para o relay deixa o
+  // decodificador frio, e esperar o intervalo custaria segundos de tela parada.
+  // O recado é barato — do outro lado ele só levanta uma bandeira, e levantá-la
+  // duas vezes é o mesmo que levantá-la uma.
+  if (!urgente && agora - (entry.lastKeyframeAsk ?? 0) < KEYFRAME_ASK_EVERY_MS) return;
+  entry.lastKeyframeAsk = agora;
   sendJson(entry.ws, { type: 'need-keyframe' });
 }
 
@@ -648,6 +673,9 @@ export function attachBroadcaster(room, ws, info, fonte = 'tela') {
     traffic: trafficCounter(),
     droppedChunks: 0,
     ann: novaAnn(),
+    // undefined = nunca dito. Vira true/false no primeiro espectador, e é o que
+    // impede o servidor de repetir o mesmo recado a cada entrada e saída.
+    chunksLigados: undefined,
   };
   room.broadcasters.set(chave, entry);
   room.slots.set(slot, entry);
@@ -726,6 +754,11 @@ export function pushChunk(room, entry, chunk) {
     // Assistir é opt-in: quem não pediu esta tela não recebe os bytes dela.
     if (!v.__watching.has(entry.slot)) continue;
 
+    // Já está recebendo esta tela pela conexão direta. O relay some do caminho
+    // dele sem que nada seja desligado: se o WebRTC cair, o slot sai deste
+    // conjunto e os bytes voltam a fluir no mesmo instante.
+    if (v.__rtc?.has(entry.slot)) continue;
+
     // Áudio não depende de keyframe — cada pacote Opus se decodifica sozinho —,
     // então não passa pelo controle de "já recebeu ponto de partida".
     if (isAudio) {
@@ -746,6 +779,9 @@ export function pushChunk(room, entry, chunk) {
         room.droppedChunks++;
         entry.droppedChunks++;
         droppedCopies++;
+        // Sem este keyframe ele continua sem ponto de partida. Pedir outro é o
+        // que evita a espera pelo periódico, que é de segundos.
+        requestKeyframe(entry);
         continue;
       }
       v.send(chunk);
@@ -761,6 +797,15 @@ export function pushChunk(room, entry, chunk) {
       room.droppedChunks++;
       entry.droppedChunks++;
       droppedCopies++;
+
+      // Um delta perdido quebra a cadeia de referência: daqui em diante o
+      // decoder dele descarta tudo até chegar um keyframe. Continuar mandando
+      // deltas seria despejar bytes indecifráveis numa conexão que já não vaza
+      // — o buffer nunca drena, o descarte nunca para, e o vídeo fica parado
+      // por segundos. Despreparar corta esse ciclo, e o pedido de keyframe traz
+      // a imagem de volta em quadros em vez de em segundos.
+      v.__primed.delete(entry.slot);
+      requestKeyframe(entry);
       continue;
     }
     v.send(chunk);
@@ -786,7 +831,9 @@ export function stopStream(room, entry) {
   for (const v of room.viewers) {
     v.__primed?.delete(entry.slot);
     v.__watching?.delete(entry.slot);
+    v.__rtc?.delete(entry.slot);
   }
+  entry.chunksLigados = undefined;
   toViewers(room, { type: 'stream-stop', slot: entry.slot });
 }
 
@@ -822,6 +869,13 @@ export function watch(room, ws, slot) {
     sendJson(ws, { type: 'ann-sync', slot, tracos: snapshotAnn(entry) });
   }
   requestKeyframe(entry);
+
+  // Convida o transmissor a abrir uma conexão direta com este espectador. É só
+  // um convite: enquanto ela não fecha — e ela pode nunca fechar — os quadros
+  // continuam chegando pelo relay, que já começou acima.
+  sendJson(entry.ws, { type: 'rtc-want', peer: ws.__peerId });
+
+  atualizarChunks(room, entry);
   broadcastState(room);
 }
 
@@ -829,6 +883,7 @@ export function unwatch(room, ws, slot) {
   // Só avisa a sala se algo mudou de fato; ver a nota em watch().
   if (!ws.__watching.delete(slot)) return;
   ws.__primed.delete(slot);
+  encerrarPeer(room, ws, slot);
   broadcastState(room);
 }
 
@@ -1065,9 +1120,98 @@ function avisarQuadroCheio(ws, entry, ev) {
   });
 }
 
+// ------------------------------------------------------------------- WebRTC
+
+/**
+ * Sinalização: o servidor só carrega envelope, nunca abre.
+ *
+ * Offer, answer e candidato ICE viajam opacos entre o transmissor e cada
+ * espectador. O relay já é o canal de todos com todos e já está autenticado —
+ * abrir um segundo canal só para isso seria uma porta a mais para guardar.
+ */
+function viewerPorPeer(room, peerId) {
+  for (const v of room.viewers) {
+    if (v.__peerId === peerId) return v;
+  }
+  return null;
+}
+
+/** Do espectador para o transmissor daquele slot. */
+export function rtcParaBroadcaster(room, ws, slot, payload) {
+  const entry = room.slots.get(slot);
+  if (!entry || !entry.streaming) return;
+  sendJson(entry.ws, { type: 'rtc', peer: ws.__peerId, payload });
+}
+
+/** Do transmissor para um espectador nomeado. */
+export function rtcParaViewer(room, entry, peerId, payload) {
+  const v = viewerPorPeer(room, peerId);
+  if (!v) return;
+  sendJson(v, { type: 'rtc', slot: entry.slot, payload });
+}
+
+/**
+ * O espectador avisa que a conexão direta assumiu — ou que caiu.
+ *
+ * É ele quem decide, e não o servidor, porque é ele que sabe se está de fato
+ * vendo quadros. Fechar o relay por causa de um `connectionState` otimista
+ * deixaria a tela preta com a conexão "conectada".
+ */
+export function rtcAtivo(room, ws, slot, ativo) {
+  const entry = room.slots.get(slot);
+  if (!entry || !ws.__watching?.has(slot)) return;
+
+  if (ativo) ws.__rtc.add(slot);
+  else {
+    if (!ws.__rtc.delete(slot)) return;
+    // Voltando ao relay, o decoder dele está frio: sem keyframe novo ele
+    // descartaria tudo até o periódico, que é de segundos.
+    ws.__primed.delete(slot);
+    requestKeyframe(entry, { urgente: true });
+  }
+
+  atualizarChunks(room, entry);
+}
+
+/** Desfaz a conexão direta de um espectador com um slot, dos dois lados. */
+function encerrarPeer(room, ws, slot) {
+  const entry = room.slots.get(slot);
+  ws.__rtc?.delete(slot);
+  if (!entry) return;
+  sendJson(entry.ws, { type: 'rtc-bye', peer: ws.__peerId });
+  atualizarChunks(room, entry);
+}
+
+/**
+ * Liga e desliga o fluxo do relay na origem.
+ *
+ * Quando todo mundo que assiste está na conexão direta, os quadros que sobem
+ * para o servidor não têm para onde ir. Continuar codificando e enviando seria
+ * gastar a subida de quem transmite — justamente o recurso mais escasso — para
+ * alimentar um caminho que ninguém está usando. Vale o contrário também: basta
+ * um espectador sem WebRTC para o relay voltar inteiro.
+ */
+function atualizarChunks(room, entry) {
+  let precisa = 0;
+  for (const v of room.viewers) {
+    if (v.__watching?.has(entry.slot) && !v.__rtc?.has(entry.slot)) precisa++;
+  }
+
+  const ligado = precisa > 0;
+  if (entry.chunksLigados === ligado) return;
+  entry.chunksLigados = ligado;
+  sendJson(entry.ws, { type: 'chunks', on: ligado });
+  // Religar o relay sem ponto de partida entregaria só deltas indecifráveis.
+  if (ligado) requestKeyframe(entry, { urgente: true });
+}
+
 export function attachViewer(room, ws, info) {
   ws.__primed = new Set();
   ws.__watching = new Set();
+  // Slots que já chegam por WebRTC. Enquanto o slot está aqui, o relay não
+  // manda os bytes dele para este espectador — seria o mesmo vídeo duas vezes.
+  ws.__rtc = new Set();
+  ws.__peerId ??= `p${proximoPeerId++}`;
   ws.__info = info;
   ws.__connectedAt = ws.__connectedAt ?? Date.now();
   ws.__mediaBytesOut = ws.__mediaBytesOut ?? 0;
@@ -1094,7 +1238,10 @@ export function attachViewer(room, ws, info) {
 }
 
 export function detachViewer(room, ws) {
+  // Sai antes de avisar: o recount de `atualizarChunks` não pode contar quem
+  // acabou de fechar a aba como alguém que ainda precisa dos quadros.
   room.viewers.delete(ws);
+  for (const slot of ws.__watching ?? []) encerrarPeer(room, ws, slot);
   // Saiu agora: o relógio começa agora. Ver marcarSemDono.
   marcarSemDono(room);
   broadcastState(room);

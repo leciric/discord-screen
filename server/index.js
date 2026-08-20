@@ -21,6 +21,9 @@ const {
   DISCORD_CLIENT_SECRET,
   DISCORD_BOT_TOKEN,
   DISCORD_ADMIN_ID = '',
+  TURN_URL = '',
+  TURN_USER = '',
+  TURN_PASS = '',
   PUBLIC_ORIGIN: ORIGEM_CRUA = LOCAL_PADRAO,
   PORT = PORTA_PADRAO,
   NODE_ENV = 'development',
@@ -276,12 +279,37 @@ app.post('/api/session', async (req, res) => {
       verificado,
     );
 
+    // A sala vai junto da sessão em vez de custar uma segunda ida.
+    //
+    // O /api/rooms/call não faria nada que não pudesse ser feito aqui: ele
+    // recebe a identidade que acabamos de assinar e deriva a sala do canal, que
+    // já está nas mãos. Numa hospedagem distante cada ida e volta é fixa e cara
+    // — medimos ~400ms por requisição, independente do que a rota faz —, então
+    // a que dá para não fazer vale mais que qualquer micro-otimização dentro
+    // dela.
+    //
+    // O /api/rooms/call continua existindo: é por onde entra quem já tem
+    // identidade e voltou depois, sem refazer o login.
+    const comoMe = {
+      uid: me.id,
+      name: me.global_name || me.username,
+      av: me.avatar ?? null,
+      instance: instance_id,
+      ...verificado,
+    };
+    const salaDela = R.ensureCallRoom(comoMe.instance, salaDaCall(comoMe), {
+      guildId: comoMe.guild ?? null,
+      guildName: comoMe.guildName ?? null,
+      channelId: comoMe.channel ?? comoMe.call ?? null,
+    });
+
     res.json({
       ...identity,
       call: presenca === 'ok' ? channelId : null,
       guild: guildId,
       guildName,
       channel: channelId,
+      sala: issueRoomTokens(salaDela.id, comoMe),
     });
   } catch (err) {
     console.error('[session] erro:', err);
@@ -741,6 +769,34 @@ app.get('/auth/callback', async (req, res) => {
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
+/**
+ * Servidores ICE para a conexão direta entre quem transmite e quem assiste.
+ *
+ * O STUN público resolve a maioria das casas: ele só conta ao navegador qual é
+ * o endereço externo dele, e a partir daí os dois lados se acham sozinhos. Quem
+ * está atrás de NAT simétrico — operadora com CGNAT, rede corporativa — não se
+ * acha de jeito nenhum, e para esses só um TURN resolve, porque ele encaminha o
+ * vídeo de fato. Custa banda, então é opcional e vem por variável de ambiente.
+ *
+ * Sem TURN configurado ninguém fica sem transmissão: quem não conseguir fechar
+ * a conexão direta continua vendo pelo relay, que nunca foi desligado.
+ */
+app.get('/api/ice', (_req, res) => {
+  const iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
+
+  if (TURN_URL) {
+    const turn = { urls: TURN_URL };
+    if (TURN_USER) turn.username = TURN_USER;
+    if (TURN_PASS) turn.credential = TURN_PASS;
+    iceServers.push(turn);
+  }
+
+  // Credencial de TURN é de curta duração e o cliente busca uma vez por sessão;
+  // guardar em cache entregaria uma senha vencida na próxima transmissão.
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ iceServers });
+});
+
 function cookieOf(req, name) {
   for (const item of String(req.headers.cookie ?? '').split(';')) {
     const separator = item.indexOf('=');
@@ -980,6 +1036,8 @@ function handleBroadcaster(ws, room, info, fonte) {
     } else if (msg.type === 'audio-config' && msg.config) {
       R.setAudioConfig(room, entry, msg.config);
       console.log(`[room ${room.id}] audio de ${info.name}: ${msg.config.codec}`);
+    } else if (msg.type === 'rtc' && typeof msg.peer === 'string' && msg.payload) {
+      R.rtcParaViewer(room, entry, msg.peer, msg.payload);
     } else if (msg.type === 'stop') {
       R.stopStream(room, entry);
       console.log(`[room ${room.id}] stream parada por ${info.name}`);
@@ -1019,6 +1077,20 @@ function handleViewer(ws, room, auth) {
 
     if (msg.type === 'unwatch' && Number.isInteger(msg.slot)) {
       R.unwatch(room, ws, msg.slot);
+      return;
+    }
+
+    // Envelope de sinalização a caminho de quem transmite. O servidor não abre:
+    // offer, answer e candidato só fazem sentido para as duas pontas.
+    if (msg.type === 'rtc' && Number.isInteger(msg.slot) && msg.payload) {
+      R.rtcParaBroadcaster(room, ws, msg.slot, msg.payload);
+      return;
+    }
+
+    // A conexão direta assumiu (ou caiu). Só quem assiste sabe dizer, porque só
+    // ele vê quadro chegando — e é isso que liga e desliga o relay para ele.
+    if (msg.type === 'rtc-ativo' && Number.isInteger(msg.slot)) {
+      R.rtcAtivo(room, ws, msg.slot, Boolean(msg.on));
       return;
     }
 

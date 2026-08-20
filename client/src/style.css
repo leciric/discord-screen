@@ -263,10 +263,12 @@ body {
 
    Com a caixa definida, `contain` faz o resto: reduz ou amplia preservando a
    proporção, nunca corta, e deixa o fundo preto aparecer nas sobras. */
-/* `video` junto de `canvas`: quem transmite daqui vê a própria captura por um
-   <video> ligado direto na origem, e ele precisa ser enquadrado exatamente como
-   o canvas de quem assiste — senão o traço, que é posicionado pela mesma conta,
-   cairia deslocado da imagem. */
+/* `video` junto de `canvas`, por dois motivos que chegaram separados e valem
+   juntos: o vídeo da conexão direta ocupa o mesmo lugar do canvas do relay, e a
+   troca entre um transporte e o outro não pode mudar o enquadramento; e quem
+   transmite daqui vê a própria captura por um <video> ligado na origem, que
+   precisa ser enquadrado como o canvas de quem assiste — senão o traço, que é
+   posicionado pela mesma conta, cairia deslocado da imagem. */
 .tile canvas,
 .tile video {
   position: absolute;

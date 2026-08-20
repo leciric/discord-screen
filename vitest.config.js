@@ -8,7 +8,7 @@ export default defineConfig({
     // sairia caro em cada teste de servidor, que não precisa de DOM nenhum.
     environment: 'node',
     setupFiles: ['./vitest.setup.js'],
-    include: ['server/**/*.test.js', 'shared/**/*.test.js'],
+    include: ['server/**/*.test.js', 'shared/**/*.test.js', 'client/src/**/*.test.js'],
 
     coverage: {
       provider: 'v8',

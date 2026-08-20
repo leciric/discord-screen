@@ -41,7 +41,33 @@ function cf(cloudflared, args, { mostrar = false } = {}) {
     encoding: 'utf8',
     stdio: mostrar ? 'inherit' : 'pipe',
   });
-  return { ok: r.status === 0, saida: `${r.stdout ?? ''}${r.stderr ?? ''}` };
+  return {
+    ok: r.status === 0,
+    saida: `${r.stdout ?? ''}${r.stderr ?? ''}`,
+    saidaLimpa: r.stdout ?? '',
+  };
+}
+
+/**
+ * A lista de túneis, ou [] quando não dá para ler.
+ *
+ * Só o stdout entra no parse, e recortado entre o primeiro `[` e o último `]`:
+ * o cloudflared escreve avisos no stderr — o de versão desatualizada é o mais
+ * comum, e nas versões novas ele sai em JSON —, e qualquer coisa colada depois
+ * do array derruba o JSON.parse. Quando isso acontecia aqui, o túnel era
+ * criado de verdade e o comando terminava dizendo que não achou o id dele.
+ */
+function listarTuneis(cloudflared) {
+  const { saidaLimpa } = cf(cloudflared, ['tunnel', 'list', '--output', 'json']);
+  const inicio = saidaLimpa.indexOf('[');
+  const fim = saidaLimpa.lastIndexOf(']');
+  if (inicio === -1 || fim < inicio) return [];
+  try {
+    const lista = JSON.parse(saidaLimpa.slice(inicio, fim + 1));
+    return Array.isArray(lista) ? lista : [];
+  } catch {
+    return [];
+  }
 }
 
 // --------------------------------------------------------------------- fluxo
@@ -136,16 +162,7 @@ linha();
 linha(`${cor.forte}  Passo 3 · Criando${cor.fim}`);
 linha();
 
-const existentes = (() => {
-  const r = cf(cloudflared, ['tunnel', 'list', '--output', 'json']);
-  try {
-    return JSON.parse(r.saida.slice(r.saida.indexOf('[')));
-  } catch {
-    return [];
-  }
-})();
-
-let tunel = existentes.find((t) => t.name === nome);
+let tunel = listarTuneis(cloudflared).find((t) => t.name === nome);
 
 if (tunel) {
   nota(`  Já existe um túnel chamado "${nome}" — vou reaproveitá-lo.`);
@@ -157,12 +174,7 @@ if (tunel) {
   }
   // O id sai na saída do create, mas a lista é a fonte que não depende do
   // formato da mensagem mudar entre versões.
-  const depois = cf(cloudflared, ['tunnel', 'list', '--output', 'json']);
-  try {
-    tunel = JSON.parse(depois.saida.slice(depois.saida.indexOf('['))).find((t) => t.name === nome);
-  } catch {
-    /* tratado abaixo */
-  }
+  tunel = listarTuneis(cloudflared).find((t) => t.name === nome);
   if (!tunel) {
     erro('O túnel foi criado mas não consegui achar o id dele. Rode o comando de novo.');
     process.exit(1);

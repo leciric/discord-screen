@@ -67,6 +67,25 @@ select {
   font: inherit;
 }
 
+/* Duas colunas em telas com espaço, empilhado no aperto. */
+.ajustes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 0 0 16px;
+}
+
+.ajustes label {
+  flex: 1 1 140px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ajustes select {
+  max-width: none;
+}
+
 .check {
   display: flex;
   gap: 10px;

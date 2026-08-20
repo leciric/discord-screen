@@ -239,6 +239,36 @@ describe('/api/session', () => {
     expect(corpo.guildName).toBeNull();
   });
 
+  it('devolve a sala da call junto, poupando uma ida ao servidor', async () => {
+    // Cada requisicao custa caro numa hospedagem distante, e o /api/rooms/call
+    // nao faria nada que nao possa ser feito aqui. Se esta chave sumir, entrar
+    // na sala volta a custar duas idas em vez de uma.
+    externas.set('https://discord.com/api/users/@me', () =>
+      json({ id: '123456789012345678', global_name: 'Alice' }),
+    );
+
+    const corpo = await (
+      await post('/api/session', { access_token: 'x', instance_id: 'sessao-sala' })
+    ).json();
+
+    expect(corpo.sala?.roomId).toBe('atividade-sessao-sala');
+    expect(corpo.sala?.viewerToken).toBeTypeOf('string');
+    expect(corpo.sala?.shareUrl).toContain('/share.html?t=');
+  });
+
+  it('a sala da sessão é a mesma que o /api/rooms/call daria', async () => {
+    externas.set('https://discord.com/api/users/@me', () =>
+      json({ id: '123456789012345678', global_name: 'Alice' }),
+    );
+
+    const sessao = await (
+      await post('/api/session', { access_token: 'x', instance_id: 'sessao-igual' })
+    ).json();
+    const pelaRota = await (await post('/api/rooms/call', { identity: sessao.identity })).json();
+
+    expect(pelaRota.roomId).toBe(sessao.sala.roomId);
+  });
+
   it('cai para o username quando não há global_name', async () => {
     externas.set('https://discord.com/api/users/@me', () =>
       json({ id: '123456789012345678', username: 'alice_2' }),
@@ -703,5 +733,20 @@ describe('painel desligado', () => {
     const resposta = await post('/api/admin/logout');
 
     expect(resposta.headers.get('set-cookie')).toContain('Max-Age=0');
+  });
+});
+
+describe('/api/ice', () => {
+  it('devolve ao menos um STUN, para a conexão direta se achar sozinha', async () => {
+    const { iceServers } = await (await get('/api/ice')).json();
+
+    expect(Array.isArray(iceServers)).toBe(true);
+    expect(iceServers.some((s) => String(s.urls).startsWith('stun:'))).toBe(true);
+  });
+
+  it('não guarda em cache: credencial de TURN vence', async () => {
+    const resposta = await get('/api/ice');
+
+    expect(resposta.headers.get('cache-control')).toBe('no-store');
   });
 });

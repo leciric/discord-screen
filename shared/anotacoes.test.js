@@ -20,8 +20,20 @@ function canvasFalso() {
   };
 
   const metodos = [
-    'setTransform', 'clearRect', 'beginPath', 'moveTo', 'lineTo', 'quadraticCurveTo',
-    'arc', 'fill', 'stroke', 'save', 'restore', 'fillText', 'roundRect', 'fillRect',
+    'setTransform',
+    'clearRect',
+    'beginPath',
+    'moveTo',
+    'lineTo',
+    'quadraticCurveTo',
+    'arc',
+    'fill',
+    'stroke',
+    'save',
+    'restore',
+    'fillText',
+    'roundRect',
+    'fillRect',
   ];
   for (const m of metodos) ctx[m] = vi.fn((...args) => ctx.chamadas.push([m, ...args]));
   ctx.createRadialGradient = vi.fn(() => ({ addColorStop: vi.fn() }));
@@ -113,7 +125,11 @@ describe('a camada', () => {
     pintar();
     expect(ctx.stroke).not.toHaveBeenCalled();
 
-    camada.aplicar({ uid: 'a', name: 'A', ev: { k: 's', id: 1, c: '#ff0000', w: 10, pts: [0, 0, 100, 100, 200, 200] } });
+    camada.aplicar({
+      uid: 'a',
+      name: 'A',
+      ev: { k: 's', id: 1, c: '#ff0000', w: 10, pts: [0, 0, 100, 100, 200, 200] },
+    });
     pintar();
     expect(ctx.stroke).toHaveBeenCalled();
   });
@@ -133,7 +149,11 @@ describe('a camada', () => {
     const { canvas } = canvasFalso();
     const camada = criarCamada(canvas, { vista: vistaCheia });
 
-    for (const [uid, id] of [['a', 1], ['b', 2], ['a', 3]]) {
+    for (const [uid, id] of [
+      ['a', 1],
+      ['b', 2],
+      ['a', 3],
+    ]) {
       camada.aplicar({ uid, name: uid, ev: { k: 's', id, c: '#f00', w: 10, pts: [0, 0, 1, 1] } });
     }
     camada.aplicar({ uid: 'a', ev: { k: 'u' } });
@@ -160,7 +180,9 @@ describe('a camada', () => {
     const camada = criarCamada(canvas, { vista: vistaCheia });
 
     camada.aplicar({ uid: 'a', ev: { k: 's', id: 9, c: '#f00', w: 10, pts: [0, 0, 1, 1] } });
-    camada.sincronizar([{ id: 'z:1', uid: 'z', name: 'Z', color: '#0f0', width: 5, pts: [2, 2, 3, 3] }]);
+    camada.sincronizar([
+      { id: 'z:1', uid: 'z', name: 'Z', color: '#0f0', width: 5, pts: [2, 2, 3, 3] },
+    ]);
 
     expect(camada.instantaneo()).toHaveLength(1);
     expect(camada.instantaneo()[0].uid).toBe('z');

@@ -464,3 +464,80 @@ describe('espectador', () => {
     ).toBeTruthy();
   });
 });
+
+/**
+ * Sinalização WebRTC pelo mesmo socket do relay.
+ *
+ * O canal já existe e já está autenticado; abrir um segundo só para offer e
+ * candidato seria uma porta a mais para guardar, e uma a mais para errar.
+ */
+describe('sinalização WebRTC', () => {
+  it('convida o transmissor a abrir a conexão direta com quem começa a assistir', async () => {
+    const room = novaSala();
+    const transmissor = await conectar(tokenDe(room.id, 'broadcaster'));
+    const { slot } = await ate(transmissor, doTipo('slot'), 'o slot');
+    transmissor.send(JSON.stringify({ type: 'start' }));
+
+    const espectador = await conectar(tokenDe(room.id, 'viewer'));
+    await ate(espectador, doTipo('stream-start'), 'o anúncio da transmissão');
+    espectador.send(JSON.stringify({ type: 'watch', slot }));
+
+    const convite = await ate(transmissor, doTipo('rtc-want'), 'o convite');
+    expect(typeof convite.peer).toBe('string');
+  });
+
+  it('leva a oferta do transmissor até o espectador nomeado', async () => {
+    const { transmissor, espectador, slot } = await noAr();
+    const { peer } = await ate(transmissor, doTipo('rtc-want'), 'o convite');
+
+    transmissor.send(
+      JSON.stringify({
+        type: 'rtc',
+        peer,
+        payload: { kind: 'offer', sdp: { type: 'offer', sdp: 'v=0' } },
+      }),
+    );
+
+    expect(await ate(espectador, doTipo('rtc'), 'a oferta')).toMatchObject({
+      slot,
+      payload: { kind: 'offer', sdp: { type: 'offer', sdp: 'v=0' } },
+    });
+  });
+
+  it('leva a resposta do espectador de volta ao transmissor', async () => {
+    const { transmissor, espectador, slot } = await noAr();
+    const { peer } = await ate(transmissor, doTipo('rtc-want'), 'o convite');
+
+    espectador.send(
+      JSON.stringify({ type: 'rtc', slot, payload: { kind: 'answer', sdp: { type: 'answer' } } }),
+    );
+
+    expect(await ate(transmissor, doTipo('rtc'), 'a resposta')).toMatchObject({
+      peer,
+      payload: { kind: 'answer', sdp: { type: 'answer' } },
+    });
+  });
+
+  it('desliga o relay na origem quando quem assiste assume a conexão direta', async () => {
+    const { transmissor, espectador, slot } = await noAr();
+    // O predicado olha o valor, e não só o tipo: o primeiro espectador já tinha
+    // ligado o relay ao pedir para assistir, e esse aviso continua no histórico.
+    const desligou = (m) => m.type === 'chunks' && m.on === false;
+
+    espectador.send(JSON.stringify({ type: 'rtc-ativo', slot, on: true }));
+
+    expect(await ate(transmissor, desligou, 'o desligamento')).toBeTruthy();
+  });
+
+  it('religa o relay, com keyframe, quando a conexão direta cai', async () => {
+    const { transmissor, espectador, slot } = await noAr();
+    espectador.send(JSON.stringify({ type: 'rtc-ativo', slot, on: true }));
+    await ate(transmissor, (m) => m.type === 'chunks' && m.on === false, 'o desligamento');
+    transmissor.recebidas.length = 0;
+
+    espectador.send(JSON.stringify({ type: 'rtc-ativo', slot, on: false }));
+
+    expect(await ate(transmissor, doTipo('chunks'), 'a religada')).toMatchObject({ on: true });
+    await ate(transmissor, doTipo('need-keyframe'), 'o ponto de partida');
+  });
+});

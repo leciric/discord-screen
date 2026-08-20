@@ -4,6 +4,14 @@ import { createAudio } from './audio.js';
 import { createBroadcaster } from '../../shared/broadcaster.js';
 import { criarCamada, conter, paraGrade, CORES, ESPESSURAS } from '../../shared/anotacoes.js';
 import { criarFlutuante, flutuarDisponivel } from '../../shared/flutuar.js';
+import {
+  iceServers,
+  criarPeer,
+  suportaWebRTC,
+  resumoPeer,
+  MORTO,
+  PRAZO_CONEXAO_MS,
+} from '../../shared/rtc.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -72,7 +80,11 @@ const volumeEfetivo = (userId) => volume * (volumePessoa.get(userId) ?? 1);
 /** Reaplica o volume de um stream depois de qualquer um dos dois mudar. */
 function aplicarVolume(slot) {
   const s = streams.get(slot);
-  s?.audio?.setVolume(volumeEfetivo(s.userId));
+  if (!s) return;
+  s.audio?.setVolume(volumeEfetivo(s.userId));
+  // Pela conexão direta o som sai do próprio <video>, e não do decodificador
+  // de áudio — o mesmo controle precisa alcançar os dois.
+  if (s.video) s.video.volume = Math.min(1, volumeEfetivo(s.userId));
 }
 // Para onde o botão de silenciar volta. Sem isto, desmutar cairia sempre em
 // 100%, ignorando o ajuste que a pessoa tinha feito.
@@ -191,6 +203,38 @@ function entradasDoGrid() {
     else for (const slot of slots) saida.push({ p, slot });
   }
   return saida;
+}
+
+/**
+ * O nó que mostra esta transmissão agora: canvas do relay ou vídeo da conexão
+ * direta. Só um dos dois está no DOM por vez, e trocar de um para o outro é o
+ * que a mudança de transporte faz de visível.
+ */
+const noDe = (s) => s.surface;
+
+/**
+ * Qual dos dois elementos está mostrando a imagem agora.
+ *
+ * São três casos e dois elementos: o canvas que o decodificador pinta, o
+ * <video> da conexão direta, e o mesmo <video> ligado na captura local de quem
+ * transmite daqui. Os três moram na mesma superfície e trocam de lugar sem que
+ * o resto do arquivo precise saber qual está no ar.
+ */
+const midiaDe = (s) => (s.local || s.viaRtc ? s.video : s.canvas);
+
+/** Resolução nativa, venha de onde vier. Zero enquanto nada foi desenhado. */
+function medidaDe(s) {
+  const el = midiaDe(s);
+  return el.tagName === 'VIDEO'
+    ? { w: el.videoWidth, h: el.videoHeight }
+    : { w: el.width, h: el.height };
+}
+
+/** Mostra o elemento que está no ar e esconde o outro, sem tirar nenhum do DOM. */
+function mostrarMidia(s) {
+  const ativo = midiaDe(s);
+  s.canvas.hidden = ativo !== s.canvas;
+  s.video.hidden = ativo !== s.video;
 }
 
 function watchSlot(slot) {
@@ -521,9 +565,9 @@ function buildTile(p, { palco = false, semVideo = false, slot: slotDado = null }
   // Com a forma do vídeo no próprio tile, a moldura passa a abraçar a imagem.
   // Sem isto, uma tela 16:9 dentro de um palco largo e baixo encolhia até caber
   // na altura e sobrava um retângulo preto ocupando metade da área.
-  if (palco && stream?.dim().w) {
-    const { w, h } = stream.dim();
-    tile.style.aspectRatio = `${w} / ${h}`;
+  const medida = stream ? medidaDe(stream) : null;
+  if (palco && medida?.w) {
+    tile.style.aspectRatio = `${medida.w} / ${medida.h}`;
   }
 
   // Sem rótulo, dois tiles da mesma pessoa lado a lado no grid não se
@@ -545,7 +589,7 @@ function buildTile(p, { palco = false, semVideo = false, slot: slotDado = null }
   };
 
   if (stream) {
-    tile.append(stream.surface);
+    tile.append(noDe(stream));
     if (palco) tile.append(buildFerramentas(slot));
     tile.title = palco
       ? telaCheia
@@ -968,7 +1012,7 @@ function vistaDe(slot) {
   if (!s) return null;
 
   const box = s.surface.getBoundingClientRect();
-  const { w: vw, h: vh } = s.dim();
+  const { w: vw, h: vh } = medidaDe(s);
   if (!box.width || !box.height || !vw || !vh) return null;
 
   const fit = conter(box.width, box.height, vw, vh);
@@ -1008,7 +1052,7 @@ function pontoDe(slot, e) {
  */
 function limitarPan(s) {
   const box = s.surface.getBoundingClientRect();
-  const { w: vw, h: vh } = s.dim();
+  const { w: vw, h: vh } = medidaDe(s);
   if (!box.width || !vw) return;
 
   const fit = conter(box.width, box.height, vw, vh);
@@ -1029,11 +1073,17 @@ function aplicarZoom(slot) {
   if (!s) return;
 
   const { z, tx, ty } = zoomDe(slot, s);
-  s.midia.style.transform = z === 1 && !tx && !ty ? '' : `translate(${tx}px, ${ty}px) scale(${z})`;
+  aplicarTransformacao(s, z === 1 && !tx && !ty ? '' : `translate(${tx}px, ${ty}px) scale(${z})`);
   s.surface.classList.toggle('ampliado', slot === activeSlot && s.zoom.z > 1);
   s.ann.repintar();
 
   if (slot === activeSlot) mostrarZoom();
+}
+
+/** O zoom vale para os dois elementos: trocar de transporte não pode desfazê-lo. */
+function aplicarTransformacao(s, valor) {
+  s.canvas.style.transform = valor;
+  s.video.style.transform = valor;
 }
 
 /**
@@ -1045,7 +1095,7 @@ function definirZoom(slot, alvo, cx, cy) {
   if (!s || slot !== activeSlot) return;
 
   const box = s.surface.getBoundingClientRect();
-  const { w: vw, h: vh } = s.dim();
+  const { w: vw, h: vh } = medidaDe(s);
   if (!box.width || !vw) return;
 
   const z0 = s.zoom.z;
@@ -1134,8 +1184,8 @@ async function alternarFlutuante(slot) {
   }
 
   const f = criarFlutuante({
-    fonte: () => (s.dim().w ? s.midia : null),
-    dim: () => s.dim(),
+    fonte: () => (medidaDe(s).w ? midiaDe(s) : null),
+    dim: () => medidaDe(s),
     aoFechar: () => {
       s.flutuante = null;
       sincronizarBarra();
@@ -1714,29 +1764,23 @@ const ICONES = {
 
 // ------------------------------------------------------------------- streams
 
-/**
- * Prepara o lugar do transmissor; o decoder só nasce quando o config chega.
- *
- * A superfície empacota o vídeo e a camada de anotações num nó só, que é o que
- * passeia entre os tiles. Ela existe porque as duas precisam andar juntas e
- * ficar recortadas pela mesma borda quando a imagem está ampliada.
- *
- * A camada de anotações é um canvas separado, e não um desenho por cima do
- * mesmo canvas do vídeo: o decoder repinta o quadro inteiro dezenas de vezes
- * por segundo, e qualquer traço feito ali sumiria no quadro seguinte.
- *
- * Ela também fica de fora do zoom, de propósito. O canvas do vídeo é ampliado
- * pelo navegador; a camada é redesenhada na resolução da tela a cada mudança —
- * é isso que mantém a linha nítida com dez vezes de aproximação.
- */
+/** Prepara o lugar do transmissor; o decoder só nasce quando o config chega. */
 function openStream(slot, userId) {
   closeStream(slot);
 
   const canvas = document.createElement('canvas');
-  const s = montarSuperficie(slot, userId, canvas, () => ({
-    w: canvas.width,
-    h: canvas.height,
-  }));
+
+  // O elemento de vídeo da conexão direta. Nasce junto e fica fora do DOM até
+  // ela fechar; criá-lo só na hora custaria um quadro preto no meio da troca.
+  const video = document.createElement('video');
+  video.autoplay = true;
+  video.playsInline = true;
+  // A política de autoplay recusa vídeo com som antes de qualquer gesto. Entrar
+  // mudo e abrir o som quando ele chega é o que evita o play() rejeitado —
+  // aplicarVolume, logo abaixo, é quem devolve o volume de verdade.
+  video.muted = true;
+
+  const s = montarSuperficie(slot, userId, canvas, video);
 
   s.player = createPlayer(canvas, {
     onError: (m) => toast(m, true),
@@ -1751,31 +1795,48 @@ function openStream(slot, userId) {
 }
 
 /**
- * A parte que as duas origens de imagem têm em comum.
+ * A superfície: os dois elementos de imagem e a camada de traços, num nó só.
  *
- * São duas: o canvas que o decodificador pinta, para quem assiste, e o <video>
- * ligado direto na captura, para quem transmite daqui. Da superfície para fora
- * elas são a mesma coisa — mesmo zoom, mesma camada de anotação, mesmo tile —,
- * e o que as diferencia é só de onde sai o tamanho da imagem. Daí `dim` vir de
- * fora: `canvas.width` e `video.videoWidth` são a mesma pergunta com dois
- * nomes, e é a única pergunta que o resto do arquivo precisa fazer.
+ * É este nó que passeia entre os tiles, e é por isso que os dois transportes
+ * moram dentro dele em vez de se revezarem no tile: trocar o relay pela conexão
+ * direta vira esconder um e mostrar o outro, sem passar pelo DOM do palco e sem
+ * levar junto o desenho que está por cima.
+ *
+ * A camada de anotações é um canvas separado, e não um desenho por cima do
+ * canvas do vídeo: o decodificador repinta o quadro inteiro dezenas de vezes
+ * por segundo, e qualquer traço feito ali sumiria no quadro seguinte.
+ *
+ * Ela também fica de fora do zoom, de propósito. A imagem é ampliada pelo
+ * navegador; a camada é redesenhada na resolução da tela a cada mudança — é
+ * isso que mantém a linha nítida com dez vezes de aproximação.
  */
-function montarSuperficie(slot, userId, midia, dim) {
-  midia.className = 'video';
+function montarSuperficie(slot, userId, canvas, video) {
+  canvas.className = 'video';
+  video.className = 'video';
+  video.hidden = true;
 
   const overlay = document.createElement('canvas');
   overlay.className = 'ann';
 
   const surface = document.createElement('div');
   surface.className = 'surface';
-  surface.append(midia, overlay);
+  surface.append(canvas, video, overlay);
 
   const s = {
     userId,
-    midia,
-    dim,
+    canvas,
+    video,
     overlay,
     surface,
+    // Conexão direta com quem transmite, quando existir. Null é o normal: ela
+    // pode nunca fechar, e nesse caso tudo continua pelo relay.
+    pc: null,
+    // Verdadeiro quando os quadros já estão chegando por ela. É esta bandeira,
+    // e não o estado do RTCPeerConnection, que decide o que vai para a tela.
+    viaRtc: false,
+    prazoRtc: null,
+    // Prévia da própria captura, e não algo que veio pela rede.
+    local: false,
     // Vira true no primeiro quadro desenhado. Até lá o tile mostra "Conectando…"
     // em vez de uma caixa preta que não se distingue de um travamento.
     started: false,
@@ -1787,8 +1848,6 @@ function montarSuperficie(slot, userId, midia, dim) {
     audio: null,
     // Janela flutuante desta tela, quando alguém a abriu.
     flutuante: null,
-    // Prévia da própria captura, e não algo que veio pela rede.
-    local: false,
   };
 
   s.ann = criarCamada(overlay, { vista: () => vistaDe(slot) });
@@ -1819,20 +1878,19 @@ function montarSuperficie(slot, userId, midia, dim) {
 function abrirPreviaLocal(slot) {
   closeStream(slot);
 
+  const canvas = document.createElement('canvas');
   const video = document.createElement('video');
   // Mudo por construção: é o som desta máquina saindo dela de novo, e o eco
   // apareceria antes mesmo de alguém entrar na sala.
   video.muted = true;
   video.playsInline = true;
   video.autoplay = true;
+
+  const s = montarSuperficie(slot, session?.user?.id, canvas, video);
+  s.local = true;
   video.srcObject = meuStream;
   video.play().catch(() => {});
-
-  const s = montarSuperficie(slot, session?.user?.id, video, () => ({
-    w: video.videoWidth,
-    h: video.videoHeight,
-  }));
-  s.local = true;
+  mostrarMidia(s);
 
   // O tamanho da captura só se conhece depois dos metadados, e muda sozinho
   // quando a janela capturada é redimensionada — as duas coisas mudam a forma
@@ -1868,6 +1926,9 @@ function startAudio(slot, config) {
 function startStream(slot, config) {
   const s = streams.get(slot);
   if (!s) return;
+  // A conexão direta está entregando: montar o decodificador do relay agora
+  // gastaria memória de GPU para desenhar num canvas que ninguém está vendo.
+  if (s.viaRtc) return;
 
   // O servidor reenvia a config a cada pedido de assistir, e o transmissor a
   // reenvia sempre que a resolução muda. Reconfigurar o decoder com a mesma
@@ -1877,7 +1938,6 @@ function startStream(slot, config) {
 
   if (!s.player?.start(config)) return;
   s.configKey = chave;
-
   renderGrid();
   renderBar();
   ensureStatsTimer();
@@ -1888,11 +1948,12 @@ function closeStream(slot) {
   if (!s) return;
   s.player?.stop();
   s.audio?.stop();
+  fecharPeer(s);
   s.flutuante?.parar();
   s.ann.parar();
   s.observer.disconnect();
   // Sem soltar a origem, o <video> segura a captura viva depois do tile sumir.
-  if (s.local) s.midia.srcObject = null;
+  if (s.local) s.video.srcObject = null;
   s.surface.remove();
   streams.delete(slot);
   // Quem estava no palco saiu: renderGrid escolhe a próxima na próxima passada.
@@ -1923,6 +1984,167 @@ function closeAllStreams() {
  * O painel mostra os números de um stream por vez: o ampliado, ou o primeiro.
  * Somar latências de fontes diferentes não significaria nada.
  */
+// -------------------------------------------------------------- WebRTC
+
+/**
+ * A oferta chegou: monta a resposta e espera os quadros.
+ *
+ * Quem assiste nunca oferece, só responde — a mídia está do outro lado, e é
+ * quem tem a mídia que sabe descrevê-la. Enquanto esta negociação acontece, o
+ * relay segue entregando normalmente: a troca só acontece no primeiro quadro
+ * que chegar de fato pela conexão direta, e não um instante antes.
+ */
+async function receberOferta(slot, sdp) {
+  const s = streams.get(slot);
+  if (!s || !suportaWebRTC()) return;
+
+  // Oferta nova para um slot que já tinha conexão significa que o outro lado
+  // recomeçou; a antiga não vai voltar a entregar nada.
+  fecharPeer(s);
+
+  try {
+    const ice = await iceServers(P);
+    // Deu tempo de a transmissão acabar enquanto a lista vinha.
+    if (streams.get(slot) !== s) return;
+
+    const pc = criarPeer({
+      ice,
+      onIce: (candidate) => enviarRtc(slot, { kind: 'ice', candidate }),
+      onEstado: (estado) => {
+        if (MORTO.has(estado)) desistirDoRtc(slot);
+      },
+      onTrack: (e) => {
+        const [remoto] = e.streams;
+        if (!remoto || s.video.srcObject === remoto) return;
+        s.video.srcObject = remoto;
+        s.video.play().catch(() => {});
+      },
+    });
+    s.pc = pc;
+
+    await pc.setRemoteDescription(sdp);
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    enviarRtc(slot, { kind: 'answer', sdp: pc.localDescription });
+
+    // O sinal de que deu certo é quadro na tela, não estado de conexão: um peer
+    // "connected" que não entrega nada é indistinguível de um travamento, e é
+    // exatamente o que este caminho existe para evitar.
+    s.video.addEventListener('loadeddata', () => assumirRtc(slot), { once: true });
+
+    clearTimeout(s.prazoRtc);
+    s.prazoRtc = setTimeout(() => {
+      if (!s.viaRtc) desistirDoRtc(slot);
+    }, PRAZO_CONEXAO_MS);
+  } catch (err) {
+    console.warn('[rtc] resposta falhou:', err.message);
+    desistirDoRtc(slot);
+  }
+}
+
+async function receberIce(slot, candidate) {
+  const pc = streams.get(slot)?.pc;
+  if (!pc || !candidate) return;
+  try {
+    await pc.addIceCandidate(candidate);
+  } catch (err) {
+    // Candidato fora de ordem é rotina e se recupera sozinho no próximo.
+    console.warn('[rtc]', err.message);
+  }
+}
+
+/** A conexão direta entregou o primeiro quadro: ela assume, e o relay sai. */
+function assumirRtc(slot) {
+  const s = streams.get(slot);
+  if (!s || s.viaRtc) return;
+
+  s.viaRtc = true;
+  clearTimeout(s.prazoRtc);
+  s.prazoRtc = null;
+
+  // O som passa a sair do <video>; manter o decodificador de áudio tocando
+  // junto daria eco com meio segundo de diferença entre os dois caminhos.
+  s.audio?.stop();
+  s.audio = null;
+  s.video.muted = false;
+  // Tirar do mudo pode fazer a política de autoplay pausar o vídeo; pedir o
+  // play de volta é barato e é o que evita a tela congelar no primeiro quadro.
+  s.video.play().catch(() => {});
+  mostrarMidia(s);
+  s.started = true;
+
+  aplicarVolume(slot);
+  ws?.send(JSON.stringify({ type: 'rtc-ativo', slot, on: true }));
+  renderGrid();
+  renderBar();
+}
+
+/**
+ * Desiste da conexão direta e volta para o relay.
+ *
+ * Vale tanto para a que nunca fechou quanto para a que caiu no meio. Nos dois
+ * casos o relay é o destino, e ele nunca precisou ser religado do lado de cá:
+ * basta o servidor voltar a mandar os bytes, e é isso que o aviso faz.
+ */
+function desistirDoRtc(slot) {
+  const s = streams.get(slot);
+  if (!s) return;
+
+  const estava = s.viaRtc;
+  fecharPeer(s);
+
+  if (estava) {
+    // O decodificador está frio desde que o relay parou; o servidor manda um
+    // keyframe junto com a religada, e é ele que traz a imagem de volta.
+    s.started = false;
+    const config = available.get(slot)?.config;
+    if (config) s.player.start(config);
+    renderGrid();
+    renderBar();
+  }
+
+  if (watching.has(slot)) ws?.send(JSON.stringify({ type: 'rtc-ativo', slot, on: false }));
+}
+
+function fecharPeer(s) {
+  clearTimeout(s.prazoRtc);
+  s.prazoRtc = null;
+  s.viaRtc = false;
+  s.video.srcObject = null;
+  s.video.muted = true;
+  mostrarMidia(s);
+  if (!s.pc) return;
+  try {
+    s.pc.close();
+  } catch {
+    // Fechar o que já se fechou lança, e não há nada a desfazer.
+  }
+  s.pc = null;
+}
+
+function enviarRtc(slot, payload) {
+  if (ws?.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type: 'rtc', slot, payload }));
+}
+
+/**
+ * Quadros por segundo do elemento de vídeo desde a última leitura.
+ *
+ * `getVideoPlaybackQuality` é o único jeito de contar quadros de um <video> sem
+ * pendurar um callback por quadro — que custaria mais do que o diagnóstico vale.
+ */
+function quadrosDoVideo(s) {
+  const q = s.video.getVideoPlaybackQuality?.();
+  if (!q) return '—';
+  const total = q.totalVideoFrames;
+  const n = total - (s.quadrosAntes ?? total);
+  s.quadrosAntes = total;
+  // Quadro descartado pelo navegador é exatamente a micro-travada que se vê.
+  const perdidos = q.droppedVideoFrames - (s.perdidosAntes ?? q.droppedVideoFrames);
+  s.perdidosAntes = q.droppedVideoFrames;
+  return perdidos > 0 ? `${n} fps · ${perdidos} perdidos` : `${n} fps`;
+}
+
 function ensureStatsTimer() {
   if (lagTimer) return;
   lagTimer = setInterval(() => {
@@ -1931,17 +2153,61 @@ function ensureStatsTimer() {
     // existem para ela.
     const s = [streams.get(activeSlot), ...streams.values()].find((x) => x?.player);
     if (!s) return;
-    $('pLag').textContent = `${Math.max(0, s.player.getLag())} ms`;
-    $('pFps').textContent = `${s.player.takeFrameCount()} fps`;
-    $('pRes').textContent = s.player.getSizes().video;
+
+    // Pela conexão direta quem conta os quadros é o próprio elemento de vídeo,
+    // e o atraso vem do ida-e-volta medido pelo ICE. O carimbo de tempo do
+    // relay não existe nesse caminho — e o do player ficaria congelado na
+    // última medição, o que é pior que não mostrar nada.
+    if (s.viaRtc) {
+      const m = medidaDe(s);
+      $('pVia').textContent = 'WebRTC (direto)';
+      $('pRes').textContent = m.w ? `${m.w}×${m.h}` : '—';
+      $('pFps').textContent = quadrosDoVideo(s);
+      $('pJitter').textContent = 'do WebRTC';
+      resumoPeer(s.pc).then(({ rtt, relay }) => {
+        if (!s.viaRtc) return;
+        $('pLag').textContent = rtt === null ? '—' : `${rtt} ms${relay ? ' · TURN' : ''}`;
+      });
+    } else {
+      $('pVia').textContent = s.pc ? 'relay (negociando direto…)' : 'relay (WebSocket)';
+      $('pLag').textContent = `${Math.max(0, s.player.getLag())} ms`;
+      $('pFps').textContent = `${s.player.takeFrameCount()} fps`;
+      $('pRes').textContent = s.player.getSizes().video;
+      // O número que interessa quando a imagem anda aos saltos sem perder um
+      // quadro sequer: o desencontro entre o ritmo em que os quadros foram
+      // capturados e o ritmo em que eles chegaram.
+      const j = s.player.getJitter();
+      $('pJitter').textContent = j === null ? '—' : `${j} ms`;
+    }
 
     // Quatro estados diferentes que, sem isto, parecem todos "sem som".
-    if (!s.audio) $('pSom').textContent = 'a transmissão não tem áudio';
+    if (s.viaRtc) {
+      const temSom = (s.video.srcObject?.getAudioTracks?.().length ?? 0) > 0;
+      if (!temSom) $('pSom').textContent = 'a transmissão não tem áudio';
+      else if (volume === 0) $('pSom').textContent = 'silenciado aqui';
+      else $('pSom').textContent = `tocando · ${Math.round(volume * 100)}%`;
+    } else if (!s.audio) $('pSom').textContent = 'a transmissão não tem áudio';
     else if (!s.audio.temSom()) $('pSom').textContent = 'aguardando o áudio…';
     else if (volume === 0) $('pSom').textContent = 'silenciado aqui';
     else $('pSom').textContent = `tocando · ${Math.round(volume * 100)}%`;
   }, 1000);
 }
+
+/**
+ * Ctrl+Shift+D reabre o diagnóstico.
+ *
+ * O botão que abria este painel saiu da barra de propósito, mas o painel em si
+ * continua sendo a única forma de saber por onde o vídeo está vindo e o quanto
+ * ele está chegando irregular. Um atalho não ocupa espaço na tela e é o que
+ * separa "está travando" de "está travando por causa disto".
+ */
+window.addEventListener('keydown', (e) => {
+  if (!e.ctrlKey || !e.shiftKey || e.code !== 'KeyD') return;
+  e.preventDefault();
+  const painel = $('panel');
+  painel.hidden = !painel.hidden;
+  if (!painel.hidden) ensureStatsTimer();
+});
 
 // ------------------------------------------------------------------- arranque
 
@@ -2029,7 +2295,11 @@ async function abrirPeloIngresso(ingresso) {
 async function entrarNaCall() {
   setEmpty('Entrando…', 'Sala desta call');
   try {
-    const tokens = await post(`${P}/api/rooms/call`, { identity: session.identity });
+    // A sessão costuma trazer a sala junto — ver a nota no /api/session. A ida
+    // ao /api/rooms/call fica para quem chegou aqui sem ela: identidade
+    // reaproveitada de uma visita anterior, ou servidor mais antigo.
+    const tokens =
+      session?.sala ?? (await post(`${P}/api/rooms/call`, { identity: session.identity }));
     openRoom(tokens, { id: tokens.roomId, name: 'Sala da call' });
   } catch (err) {
     setEmpty('Não foi possível entrar', err.message);
@@ -2465,16 +2735,24 @@ async function authDiscord(fonteDoId) {
   });
 
   const { access_token } = await post(`${P}/api/token`, { code, client_id: clientId });
-  await sdk.commands.authenticate({ access_token });
 
+  // Em paralelo, e não em fila: o authenticate avisa o cliente do Discord, o
+  // /api/session consulta o Discord pelo nosso servidor, e nenhum dos dois
+  // depende do resultado do outro. Em série eram duas esperas somadas.
+  //
   // guild/channel vão junto para o servidor poder confirmar, pelo Discord, que
   // a pessoa está mesmo naquela call.
-  return post(`${P}/api/session`, {
-    access_token,
-    instance_id: sdk.instanceId,
-    guild_id: sdk.guildId,
-    channel_id: sdk.channelId,
-  });
+  const [, sessao] = await Promise.all([
+    sdk.commands.authenticate({ access_token }),
+    post(`${P}/api/session`, {
+      access_token,
+      instance_id: sdk.instanceId,
+      guild_id: sdk.guildId,
+      channel_id: sdk.channelId,
+    }),
+  ]);
+
+  return sessao;
 }
 
 /**
@@ -2581,6 +2859,13 @@ function connect() {
     }
 
     const msg = JSON.parse(e.data);
+
+    // Sinalização da conexão direta, repassada por quem transmite.
+    if (msg.type === 'rtc' && Number.isInteger(msg.slot)) {
+      if (msg.payload?.kind === 'offer') receberOferta(msg.slot, msg.payload.sdp);
+      else if (msg.payload?.kind === 'ice') receberIce(msg.slot, msg.payload.candidate);
+      return;
+    }
 
     if (msg.type === 'state') {
       participants = msg.participants ?? [];
@@ -3007,6 +3292,7 @@ async function broadcastFromHere() {
 
   const b = createBroadcaster({
     wsUrl: `${proto}://${location.host}${P}/ws?t=${encodeURIComponent(shareToken)}`,
+    apiBase: P,
     bitrate: ajustes.bitrate,
     fps: ajustes.fps,
     audio: true,

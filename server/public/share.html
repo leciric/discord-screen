@@ -24,6 +24,30 @@
         <section class="bloco" id="bloco-tela">
           <h2>Tela</h2>
 
+          <!-- Fora do setup e do live de propósito: dá para escolher antes de
+               começar e para corrigir com a transmissão no ar, que é quando o
+               problema costuma aparecer. Vale para a câmera também. -->
+          <div class="ajustes">
+            <label>
+              Qualidade
+              <select id="qualidade">
+                <option value="800000">Leve — 0,8 Mbps</option>
+                <option value="1500000">Média — 1,5 Mbps</option>
+                <option value="2500000">Boa — 2,5 Mbps</option>
+                <option value="5000000">Alta — 5 Mbps</option>
+                <option value="8000000">Máxima — 8 Mbps</option>
+              </select>
+            </label>
+            <label>
+              Quadros
+              <select id="quadros">
+                <option value="15">15 fps</option>
+                <option value="30">30 fps</option>
+                <option value="60">60 fps</option>
+              </select>
+            </label>
+          </div>
+
           <div id="tela-setup">
             <div class="sem-preview" id="tela-vazio">Sem preview</div>
             <video id="tela-previa" muted playsinline hidden></video>
