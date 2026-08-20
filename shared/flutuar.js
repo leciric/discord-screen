@@ -67,7 +67,14 @@ export function criarFlutuante({ fonte, dim, aoFechar }) {
   const camada = criarCamada(traços, {
     vista: () =>
       mistura.width
-        ? { boxW: mistura.width, boxH: mistura.height, x: 0, y: 0, w: mistura.width, h: mistura.height }
+        ? {
+            boxW: mistura.width,
+            boxH: mistura.height,
+            x: 0,
+            y: 0,
+            w: mistura.width,
+            h: mistura.height,
+          }
         : null,
   });
 
@@ -124,7 +131,8 @@ export function criarFlutuante({ fonte, dim, aoFechar }) {
       throw new Error('Este navegador não abre janela flutuante (Picture-in-Picture).');
     }
 
-    if (!ajustarTamanho()) throw new Error('A imagem ainda não chegou. Tente de novo em um instante.');
+    if (!ajustarTamanho())
+      throw new Error('A imagem ainda não chegou. Tente de novo em um instante.');
 
     document.body.append(saida);
     laço = requestAnimationFrame(compor);

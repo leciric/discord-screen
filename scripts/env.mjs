@@ -104,9 +104,9 @@ export function gravarEnv(novos) {
   // pode sumir em silencio porque alguem rodou o assistente.
   const extras = Object.keys(v).filter((k) => !CONHECIDAS.includes(k));
   if (extras.length) {
-    linhas.push("# Escritas por voce, mantidas como estavam.");
-    for (const k of extras) linhas.push(k + "=" + v[k]);
-    linhas.push("");
+    linhas.push('# Escritas por voce, mantidas como estavam.');
+    for (const k of extras) linhas.push(k + '=' + v[k]);
+    linhas.push('');
   }
 
   fs.writeFileSync(ARQUIVO, linhas.join('\n'));

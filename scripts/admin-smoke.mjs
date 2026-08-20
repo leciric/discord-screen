@@ -65,6 +65,12 @@ const child = spawn(process.execPath, ['server/index.js'], {
     NODE_ENV: 'development',
     SESSION_SECRET: TEST_SECRET,
     DISCORD_ADMIN_ID: TEST_ADMIN,
+    // Credenciais de mentira, mas presentes: sem elas o /admin/auth/login
+    // devolve um redirect relativo de "nao configurado" e o teste morre em
+    // "Invalid URL". Estavam vindo do .env de quem rodava, entao o teste
+    // passava na maquina do autor e em lugar nenhum mais.
+    DISCORD_CLIENT_ID: '123456789012345678',
+    DISCORD_CLIENT_SECRET: 'admin-smoke-client-secret',
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
@@ -87,8 +93,14 @@ try {
 
   const login = await fetch(`${base}/admin/auth/login`, { redirect: 'manual' });
   const loginUrl = new URL(login.headers.get('location'));
-  check(login.status === 302 && loginUrl.hostname === 'discord.com', 'login redireciona ao Discord');
-  check(Boolean(loginUrl.searchParams.get('state')), 'login administrativo usa OAuth state assinado');
+  check(
+    login.status === 302 && loginUrl.hostname === 'discord.com',
+    'login redireciona ao Discord',
+  );
+  check(
+    Boolean(loginUrl.searchParams.get('state')),
+    'login administrativo usa OAuth state assinado',
+  );
 
   const unauthorized = await fetch(`${base}/api/admin/metrics`);
   check(unauthorized.status === 401, 'metricas recusam acesso sem sessao');
@@ -102,10 +114,16 @@ try {
   });
   const metrics = await authorized.json();
   check(authorized.status === 200, 'admin autorizado recebe metricas');
-  check(Boolean(metrics.summary && metrics.traffic && metrics.system), 'payload contem app e sistema');
+  check(
+    Boolean(metrics.summary && metrics.traffic && metrics.system),
+    'payload contem app e sistema',
+  );
   check(!JSON.stringify(metrics).includes(TEST_SECRET), 'payload nao vaza segredo de sessao');
 
-  const identity = await post(base, '/api/session-dev', { instance_id: 'admin-smoke', name: 'Alice' });
+  const identity = await post(base, '/api/session-dev', {
+    instance_id: 'admin-smoke',
+    name: 'Alice',
+  });
   const room = await post(base, '/api/rooms/create', {
     identity: identity.identity,
     name: 'Sala monitorada',
@@ -129,7 +147,10 @@ try {
   }).then((response) => response.json());
   check(measured.traffic.receivedBytes >= frame.length, 'dashboard mede bytes recebidos');
   check(measured.traffic.transmittedBytes >= frame.length, 'dashboard mede bytes enviados');
-  check(measured.streams.some((stream) => stream.watchers === 1), 'dashboard relaciona stream e espectador');
+  check(
+    measured.streams.some((stream) => stream.watchers === 1),
+    'dashboard relaciona stream e espectador',
+  );
   viewer.close();
   broadcaster.close();
 

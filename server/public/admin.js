@@ -128,18 +128,21 @@ function render(data) {
   const { summary, traffic } = data;
 
   text('statPeople', String(summary.users));
-  text('statPeopleSub', summary.rooms ? count(summary.rooms, 'sala', 'salas') : 'nenhuma sala aberta');
+  text(
+    'statPeopleSub',
+    summary.rooms ? count(summary.rooms, 'sala', 'salas') : 'nenhuma sala aberta',
+  );
 
   text('statStreams', String(summary.streams));
   text('statStreamsSub', count(summary.activeWatchers, 'assistindo', 'assistindo'));
 
   text(
     'statBandwidth',
-    formatRate(traffic.receivedBytesPerSecond + traffic.transmittedBytesPerSecond)
+    formatRate(traffic.receivedBytesPerSecond + traffic.transmittedBytesPerSecond),
   );
   text(
     'statBandwidthSub',
-    `↓ ${formatRate(traffic.receivedBytesPerSecond)} · ↑ ${formatRate(traffic.transmittedBytesPerSecond)}`
+    `↓ ${formatRate(traffic.receivedBytesPerSecond)} · ↑ ${formatRate(traffic.transmittedBytesPerSecond)}`,
   );
 
   // Quadro que o servidor deixou de mandar porque a fila daquele espectador
@@ -152,7 +155,7 @@ function render(data) {
   text('statPing', formatMs(summary.pingAverageMs));
   text(
     'statPingSub',
-    Number.isFinite(summary.pingP95Ms) ? `p95 ${formatMs(summary.pingP95Ms)}` : ' '
+    Number.isFinite(summary.pingP95Ms) ? `p95 ${formatMs(summary.pingP95Ms)}` : ' ',
   );
 
   renderPeople(data);
@@ -286,7 +289,7 @@ function renderAmbiente(data) {
       dd.title = valor;
       par.append(dt, dd);
       return par;
-    })
+    }),
   );
 }
 
@@ -368,7 +371,10 @@ async function boot() {
       $('loading').hidden = true;
       $('login').hidden = false;
       if (body.configured === false) {
-        text('loginMessage', 'O painel está desligado. Defina DISCORD_ADMIN_ID no arquivo .env e reinicie.');
+        text(
+          'loginMessage',
+          'O painel está desligado. Defina DISCORD_ADMIN_ID no arquivo .env e reinicie.',
+        );
         $('loginButton').hidden = true;
       }
       return;

@@ -45,11 +45,56 @@ function fitWithin(w, h) {
   return { width: even(Math.round(w * scale)), height: even(Math.round(h * scale)) };
 }
 
-/** Motivo pelo qual este navegador não consegue transmitir, ou null. */
-export function supportError({ requireChromium = false } = {}) {
-  if (!navigator.mediaDevices?.getDisplayMedia) {
-    return 'Este navegador não permite captura de tela. Navegador de celular não suporta captura — use um desktop.';
+/**
+ * Restrições do som capturado junto com a tela.
+ *
+ * Os tratamentos de voz ficam desligados: eles existem para microfone e, em som
+ * de aplicativo, cortam justamente o que se queria ouvir.
+ */
+export function restricoesDeSom() {
+  const c = {
+    echoCancellation: false,
+    noiseSuppression: false,
+    autoGainControl: false,
+  };
+  if (navigator.mediaDevices.getSupportedConstraints?.().restrictOwnAudio) {
+    c.restrictOwnAudio = true;
   }
+  return c;
+}
+
+/**
+ * Opções da captura de tela.
+ *
+ * Exportada porque a prévia da página de captura precisa pedir exatamente o
+ * mesmo. Um stream aberto com opções diferentes não serve para transmitir
+ * depois: sem faixa de som, ligar o som exigiria escolher a tela de novo — e
+ * abrir o seletor duas vezes para o mesmo compartilhamento é o que a prévia
+ * existe para evitar.
+ *
+ * windowAudio: 'window' pede o som da janela escolhida em vez de só o da aba,
+ * que é o que destrava transmitir um jogo com o som dele.
+ */
+export function opcoesTela({ fps = 30, comSom = false, video } = {}) {
+  const opts = {
+    video: video ?? { frameRate: { ideal: fps, max: fps } },
+    audio: comSom ? restricoesDeSom() : false,
+  };
+  if (comSom) {
+    opts.windowAudio = 'window';
+    opts.systemAudio = 'exclude';
+  }
+  return opts;
+}
+
+/**
+ * Motivo pelo qual este navegador não consegue transmitir nada, ou null.
+ *
+ * Só o que vale para as duas fontes. O que cada uma precisa é pergunta de cada
+ * uma — ver `fonteIndisponivel` —, senão faltar `getDisplayMedia` derrubaria
+ * também a câmera, que não depende dele.
+ */
+export function supportError({ requireChromium = false } = {}) {
   if (!window.VideoEncoder || !window.VideoFrame || !window.EncodedVideoChunk) {
     return 'Este navegador não tem WebCodecs, necessário para transmitir. Use Chrome, Edge ou outro navegador Chromium no desktop.';
   }
@@ -62,16 +107,34 @@ export function supportError({ requireChromium = false } = {}) {
 }
 
 /**
+ * Motivo pelo qual esta fonte não pode ser capturada aqui, ou null.
+ *
+ * Separado do `supportError` porque as duas dependem de APIs diferentes: um
+ * celular não tem `getDisplayMedia` e tem `getUserMedia`, e derrubar a página
+ * inteira por causa da tela tirava dele a câmera, que funcionaria.
+ */
+export function fonteIndisponivel(fonte) {
+  if (fonte === 'camera') {
+    return navigator.mediaDevices?.getUserMedia
+      ? null
+      : 'Este navegador não permite acesso à câmera.';
+  }
+  return navigator.mediaDevices?.getDisplayMedia
+    ? null
+    : 'Este navegador não permite captura de tela. Navegador de celular não suporta captura — use um desktop.';
+}
+
+/**
  * @param {object} opts
  * @param {string} opts.wsUrl        endpoint do relay, com o token de transmissor
  * @param {number} opts.bitrate      bits por segundo
  * @param {number} opts.fps
  * @param {boolean} [opts.audio]     capturar também o som do computador
+ * @param {'tela'|'camera'} [opts.fonte]  de onde vem o vídeo
  * @param {(info:object)=>void} [opts.onStatus]  codec/resolução/caminho de captura
  * @param {(stats:object)=>void} [opts.onStats]  viewers, fps, mbps, segundos no ar
  * @param {(reason:string)=>void} [opts.onEnd]   encerrou (por qualquer motivo)
  * @param {(msg:string)=>void} [opts.onAviso]    algo mudou sem ser erro
- * @param {(msg:string)=>void} [opts.onError]
  * @param {(msg:object)=>void} [opts.onAnn]      laser/desenho de quem assiste
  */
 export function createBroadcaster({
@@ -79,10 +142,15 @@ export function createBroadcaster({
   bitrate,
   fps,
   audio = false,
+  fonte = 'tela',
+  // Stream já aberto pela prévia. Reaproveitá-lo é o que evita abrir o seletor
+  // de tela duas vezes — e, na câmera, segurar o dispositivo em duas capturas.
+  streamPronto = null,
+  // Qual câmera, quando há mais de uma. Ignorado pela tela, que não tem lista.
+  deviceId = null,
   onStatus,
   onStats,
   onEnd,
-  onError,
   onAviso,
   onAnn,
 }) {
@@ -114,19 +182,20 @@ export function createBroadcaster({
 
   async function start() {
     // Precisa vir do gesto do usuário; qualquer await antes disso o invalida.
-    stream = await navigator.mediaDevices.getDisplayMedia({
-      video: { frameRate: { ideal: fps, max: fps } },
-      // systemAudio: 'include' pede o som do computador em vez de só o da aba.
-      // Os tratamentos de voz ficam desligados: eles existem para microfone e,
-      // em som de aplicativo, cortam justamente o que se queria ouvir.
-      audio: audio ? audioConstraints() : false,
-    });
+    // A prévia já pagou esse preço, então quando ela existe não há o que pedir.
+    stream = streamPronto ?? (fonte === 'camera' ? await capturarCamera() : await capturarTela());
 
     const track = stream.getVideoTracks()[0];
-    // Diz ao encoder que o conteúdo é tela (texto/UI), não vídeo natural —
-    // preserva nitidez das bordas em vez de suavizar.
-    track.contentHint = 'text';
-    track.addEventListener('ended', () => stop('Você parou o compartilhamento pelo navegador.'));
+    // Tela é texto e interface, onde suavizar borra o que importa. Câmera é
+    // vídeo natural, e aí suavizar é justamente o certo.
+    track.contentHint = fonte === 'camera' ? 'motion' : 'text';
+    track.addEventListener('ended', () =>
+      stop(
+        fonte === 'camera'
+          ? 'A câmera foi desligada.'
+          : 'Você parou o compartilhamento pelo navegador.',
+      ),
+    );
 
     const s = track.getSettings();
     const target = fitWithin(s.width ?? 1280, s.height ?? 720);
@@ -181,6 +250,36 @@ export function createBroadcaster({
     return stream;
   }
 
+  function capturarTela() {
+    return navigator.mediaDevices.getDisplayMedia(opcoesCaptura());
+  }
+
+  /**
+   * Câmera, sempre sem som.
+   *
+   * O microfone fica de fora de propósito: a voz já anda pela call do Discord,
+   * com cancelamento de eco que aqui não existe. Somá-la devolveria a mesma
+   * pessoa duas vezes, fora de sincronia — e o `prepararSom` nem chega a rodar,
+   * porque sem faixa de áudio no stream ele retorna null.
+   *
+   * 720p de teto porque câmera não tem texto a preservar: acima disso é banda
+   * gasta em ruído de sensor, e o teto de 1080p do `fitWithin` nem entra em
+   * jogo.
+   */
+  function capturarCamera() {
+    return navigator.mediaDevices.getUserMedia({
+      video: {
+        // `exact` de propósito: escolher uma câmera e receber outra porque a
+        // pedida sumiu é pior que a falha, que ao menos diz o que houve.
+        ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+        frameRate: { ideal: fps, max: fps },
+      },
+      audio: false,
+    });
+  }
+
   /**
    * Restrições da captura de som.
    *
@@ -191,64 +290,126 @@ export function createBroadcaster({
    * sem ele, quem transmite enquanto assiste a outra tela devolveria o som dela
    * de volta para a sala, em laço. É experimental, então vai sob detecção.
    */
-  function audioConstraints() {
-    const c = {
-      systemAudio: 'include',
-      echoCancellation: false,
-      noiseSuppression: false,
-      autoGainControl: false,
-    };
-    if (navigator.mediaDevices.getSupportedConstraints?.().restrictOwnAudio) {
-      c.restrictOwnAudio = true;
-    }
-    return c;
+
+  /**
+   * Opções da captura de tela.
+   *
+   * `windowAudio` e `systemAudio` são membros de DisplayMediaStreamOptions —
+   * irmãos de `audio` e `video`, não constraints. Dentro do objeto de `audio`,
+   * que era onde `systemAudio` estava, os dois são ignorados em silêncio.
+   *
+   * O par pedido é sempre o mesmo, porque a superfície só se conhece depois da
+   * escolha: escopar o som à janela e recusar a mistura do sistema. É o mesmo
+   * veto do prepararSom, aplicado antes de o som existir — quem escolhe a tela
+   * inteira volta sem faixa nenhuma, em vez de com uma que precisa ser morta.
+   */
+  const opcoesCaptura = (over) => opcoesTela({ fps, comSom: audio, ...over });
+
+  /**
+   * Dá para confiar no som que veio junto de uma janela?
+   *
+   * Não existe pergunta direta: opção de captura desconhecida é ignorada sem
+   * erro, e `getSupportedConstraints` não lista `windowAudio` nem `systemAudio`
+   * porque nenhum dos dois é constraint. `restrictOwnAudio` é, e é bem mais
+   * nova que os dois — onde ela existe, a pilha de captura é atual o bastante
+   * para obedecer ao `systemAudio: 'exclude'` que sempre pedimos. E se a
+   * exclusão foi obedecida, uma faixa que chegou numa janela não pode ser a
+   * mistura do sistema: só sobra o som daquela janela.
+   *
+   * Errar para menos custa o comportamento antigo, só aba. Errar para mais
+   * devolveria a call em eco — por isso a prova é a feature mais nova das três,
+   * e não a mais antiga.
+   */
+  function somDeJanelaConfiavel() {
+    return Boolean(navigator.mediaDevices.getSupportedConstraints?.().restrictOwnAudio);
   }
 
-/**
+  /**
    * Devolve a faixa de som, ou null quando ela traria a call de volta em eco.
    *
-   * O nó: o som do sistema é capturado como uma mistura única, e nenhum
-   * navegador expõe um jeito de tirar um processo dela. O Windows tem essa API
-   * (é assim que o Discord nativo compartilha som sem se ouvir), mas página web
-   * não alcança. Então "som da tela inteira" é sempre "som do sistema INTEIRO",
-   * com a saída do Discord dentro — e a call inteira se escuta, com atraso.
+   * O nó: o som do sistema é capturado como uma mistura única. "Som da tela
+   * inteira" é sempre "som do sistema INTEIRO", com a saída do Discord dentro —
+   * e a call inteira se escuta, com atraso.
    *
-   * Aba é diferente: o som sai só daquela aba, e o Discord nunca entra.
+   * Duas superfícies escapam disso. Aba, que sempre foi isolada por construção:
+   * o som sai só dali e o Discord nunca entra. E janela, desde que o navegador
+   * aceite escopar o som ao processo dela — é o que `windowAudio: 'window'`
+   * pede em opcoesCaptura, e é o que destrava transmitir um jogo com o som do
+   * jogo, que antes era impossível por aqui.
    *
-   * Por isso a mistura do sistema é recusada aqui, antes de sair da máquina. O
-   * que evita a versão anterior disto virar um beco sem saída é `trocarSom()`:
-   * dá para manter o vídeo da tela inteira e pegar o som de uma aba.
+   * Fora dessas duas a faixa morre aqui, antes de sair da máquina — e aí sim
+   * acende o `somBloqueado`, porque veio som e ele foi barrado.
+   *
+   * Vir sem faixa nenhuma é silêncio, não erro: o som é sempre pedido, e é a
+   * caixa "Compartilhar o áudio" do seletor que decide. Quem a deixou desmarcada
+   * escolheu transmitir sem som, e avisar disso seria acusar a escolha.
    */
   function prepararSom(videoTrack, capturado) {
+    if (!audio) return null;
+
     const faixa = capturado.getAudioTracks()[0];
     if (!faixa) return null;
 
-    if (videoTrack.getSettings?.().displaySurface === 'browser') return faixa;
+    const superficie = videoTrack.getSettings?.().displaySurface;
+    if (somIsolado(superficie)) {
+      somBloqueado = false;
+      return faixa;
+    }
 
     faixa.stop();
     capturado.removeTrack(faixa);
+
     somBloqueado = true;
-    onAviso?.(
-      'A tela inteira carrega o som do Discord junto, e a call se ouviria em eco. ' +
-        'Transmitindo sem som — use "Som de uma aba" para escolher de onde vem o áudio.'
-    );
+    onAviso?.(avisoSemSom(superficie));
     return null;
+  }
+
+  /** A superfície escolhida entrega som sem levar o Discord junto? */
+  function somIsolado(superficie) {
+    if (superficie === 'browser') return true;
+    return superficie === 'window' && somDeJanelaConfiavel();
+  }
+
+  /** Por que o som que veio foi barrado, e por onde sair disso. */
+  function avisoSemSom(superficie) {
+    const saida = ' Ou use "Som de uma aba ou janela" para escolher a fonte.';
+
+    // Janela só chega aqui quando o navegador não sabe escopar o som a ela.
+    if (superficie === 'window') {
+      return (
+        'Este navegador não isola o som por janela, e o som do computador traria o Discord ' +
+        'junto. Transmitindo sem som.' +
+        saida
+      );
+    }
+    if (superficie === 'monitor') {
+      const comoLevar = somDeJanelaConfiavel()
+        ? ' Compartilhe o jogo como janela para levar o som dele.'
+        : '';
+      return (
+        'A tela inteira carrega o som do Discord junto, e a call se ouviria em eco. ' +
+        'Transmitindo sem som.' +
+        comoLevar +
+        saida
+      );
+    }
+    return 'Não deu para confirmar de onde vinha esse som, então ele foi removido.' + saida;
   }
 
   /**
    * Troca só a fonte do som, sem tocar no vídeo.
    *
    * É o que torna som e tela inteira compatíveis: o vídeo continua sendo a tela
-   * escolhida e o som passa a vir de uma aba, que é isolada por construção. A
-   * segunda janela de escolha é o preço, e é um preço honesto — não há como o
-   * navegador adivinhar de qual aplicativo o som deveria vir.
+   * escolhida e o som passa a vir de uma aba ou de uma janela, que são as
+   * fontes isoladas. A segunda janela de escolha é o preço, e é um preço
+   * honesto — o navegador não tem como adivinhar de qual aplicativo o som
+   * deveria vir.
    */
   async function trocarSom() {
     // Precisa vir do gesto do usuário, como qualquer getDisplayMedia.
-    const escolha = await navigator.mediaDevices.getDisplayMedia({
-      video: true,
-      audio: audioConstraints(),
-    });
+    const escolha = await navigator.mediaDevices.getDisplayMedia(
+      opcoesCaptura({ video: true, comSom: true }),
+    );
 
     const faixa = escolha.getAudioTracks()[0];
     const superficie = escolha.getVideoTracks()[0]?.getSettings?.().displaySurface;
@@ -259,14 +420,18 @@ export function createBroadcaster({
     if (!faixa) {
       escolha.getTracks().forEach((t) => t.stop());
       throw new Error(
-        'Essa escolha veio sem som. Escolha uma aba e marque "Compartilhar o áudio da guia".'
+        somDeJanelaConfiavel()
+          ? 'Essa escolha veio sem som. Escolha uma aba ou a janela do aplicativo e marque "Compartilhar o áudio".'
+          : 'Essa escolha veio sem som. Escolha uma aba e marque "Compartilhar o áudio da guia".',
       );
     }
 
-    if (superficie !== 'browser') {
+    if (!somIsolado(superficie)) {
       faixa.stop();
       throw new Error(
-        'Só aba tem som isolado. Tela inteira traria o Discord junto e a call se ouviria.'
+        superficie === 'window'
+          ? 'Este navegador não isola o som por janela. Escolha uma aba.'
+          : 'Tela inteira traria o Discord junto e a call se ouviria. Escolha uma aba ou a janela do aplicativo.',
       );
     }
 
@@ -277,12 +442,14 @@ export function createBroadcaster({
     if (audioEncoder?.state === 'configured') {
       try {
         audioEncoder.close();
-      } catch {}
+      } catch {
+        // Fechar o que já se fechou sozinho lança; não há nada a desfazer.
+      }
     }
     audioEncoder = null;
 
     somBloqueado = false;
-    faixa.addEventListener('ended', () => onAviso?.('A aba do som foi fechada.'));
+    faixa.addEventListener('ended', () => onAviso?.('A fonte do som foi fechada.'));
     pumpAudio(faixa);
     return faixa;
   }
@@ -309,7 +476,12 @@ export function createBroadcaster({
         // Som é acessório: se o encoder cair, a tela continua no ar.
         error: (err) => console.warn('[audio encoder]', err.message),
       });
-      audioEncoder.configure({ codec: 'opus', sampleRate, numberOfChannels, bitrate: AUDIO_BITRATE });
+      audioEncoder.configure({
+        codec: 'opus',
+        sampleRate,
+        numberOfChannels,
+        bitrate: AUDIO_BITRATE,
+      });
     } catch (err) {
       console.warn('[audio encoder]', err.message);
       audioEncoder = null;
@@ -318,7 +490,10 @@ export function createBroadcaster({
 
     // O mesmo caminho do vídeo: quem chega depois recebe isto ao pedir a tela.
     ws?.send(
-      JSON.stringify({ type: 'audio-config', config: { codec: 'opus', sampleRate, numberOfChannels } })
+      JSON.stringify({
+        type: 'audio-config',
+        config: { codec: 'opus', sampleRate, numberOfChannels },
+      }),
     );
 
     audioReader = new MediaStreamTrackProcessor({ track }).readable.getReader();
@@ -539,7 +714,7 @@ export function createBroadcaster({
     const buf = empacotar(
       chunk.type === 'key' ? TIPO_KEYFRAME : TIPO_DELTA,
       chunk.timestamp ?? 0,
-      data
+      data,
     );
     ws.send(buf);
     bytes += buf.byteLength;
@@ -567,7 +742,7 @@ export function createBroadcaster({
     const out = { codec: dc.codec, codedWidth: dc.codedWidth, codedHeight: dc.codedHeight };
     if (dc.description) {
       const b = new Uint8Array(
-        dc.description instanceof ArrayBuffer ? dc.description : dc.description.buffer
+        dc.description instanceof ArrayBuffer ? dc.description : dc.description.buffer,
       );
       let bin = '';
       for (const x of b) bin += String.fromCharCode(x);
@@ -601,12 +776,8 @@ export function createBroadcaster({
         else if (msg.type === 'state') viewers = msg.viewers;
         // Alguém entrou na sala e precisa de um ponto de partida.
         else if (msg.type === 'need-keyframe') wantKeyframe = true;
-        // O motivo vem do servidor quando ele tem um: "você saiu da sala" é
-        // bem diferente de "você clicou em parar", e a diferença é tudo o que a
-        // pessoa tem para entender por que a captura sumiu sozinha.
-        else if (msg.type === 'stop-request') {
-          stop(msg.reason ?? 'Transmissão encerrada pela atividade.');
-        }
+        else if (msg.type === 'stop-request')
+          stop(msg.motivo ?? 'Transmissão encerrada pela atividade.');
         // Laser e desenho de quem assiste. Chegam aqui para quem transmite ver
         // o que estão apontando na própria tela, sem ter que voltar ao Discord.
         else if (msg.type === 'ann' || msg.type === 'ann-sync') onAnn?.(msg);
@@ -643,10 +814,7 @@ export function createBroadcaster({
    */
   async function changeScreen() {
     // Precisa vir do gesto do usuário, como qualquer getDisplayMedia.
-    const fresh = await navigator.mediaDevices.getDisplayMedia({
-      video: { frameRate: { ideal: fps, max: fps } },
-      audio: audio ? audioConstraints() : false,
-    });
+    const fresh = await navigator.mediaDevices.getDisplayMedia(opcoesCaptura());
 
     const previous = stream;
     const previousReader = reader;
@@ -729,7 +897,9 @@ export function createBroadcaster({
       if (e?.state === 'configured') {
         try {
           e.close();
-        } catch {}
+        } catch {
+          // Fechar o que já se fechou sozinho lança; não há nada a desfazer.
+        }
       }
     }
     encoder = null;

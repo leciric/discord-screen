@@ -126,21 +126,24 @@ const run = async () => {
   check(
     'sala sem nome herda o nome de quem criou',
     lista.some((r) => r.name === 'Sala de Alice'),
-    lista.map((r) => r.name).join(', ')
+    lista.map((r) => r.name).join(', '),
   );
   check('lista mostra todas as salas', lista.length === 3);
   check(
     'lista marca qual tem senha, sem vazar o hash',
     lista.find((r) => r.name === 'Sala Trancada').locked === true &&
-      lista.every((r) => !('password' in r))
+      lista.every((r) => !('password' in r)),
   );
-  check('lista informa o dono', lista.every((r) => r.owner === 'Alice'));
+  check(
+    'lista informa o dono',
+    lista.every((r) => r.owner === 'Alice'),
+  );
 
   const semLogin = await api('/api/rooms/list', {});
   check('lobby publico responde sem login', semLogin.status === 200);
   check(
     'salas de teste nao vazam para o lobby publico',
-    !semLogin.body.rooms.some((r) => r.name === 'Sala Aberta')
+    !semLogin.body.rooms.some((r) => r.name === 'Sala Aberta'),
   );
 
   // --------------------------------------------------------- sala da call
@@ -154,12 +157,15 @@ const run = async () => {
   check(
     'mesma instancia cai na mesma sala',
     semCallDeNovo.body.roomId === semCall.body.roomId,
-    semCall.body.roomId
+    semCall.body.roomId,
   );
 
   const outraInstancia = await identity(CANAL_B, 'Zeca');
   const salaDeOutroCanal = await api('/api/rooms/call', { identity: outraInstancia.identity });
-  check('outra instancia cai em sala diferente', salaDeOutroCanal.body.roomId !== semCall.body.roomId);
+  check(
+    'outra instancia cai em sala diferente',
+    salaDeOutroCanal.body.roomId !== semCall.body.roomId,
+  );
 
   const forasteiro = await api('/api/rooms/join', {
     identity: outraInstancia.identity,
@@ -167,8 +173,12 @@ const run = async () => {
   });
   check('quem e de outra instancia nao entra na sala dela', forasteiro.status === 403);
 
-  const naCall = (await api('/api/session-dev', { instance_id: TEST_INSTANCE, name: 'Vera', call: 'canal-9' })).body;
-  const outraCall = (await api('/api/session-dev', { instance_id: TEST_INSTANCE, name: 'Ugo', call: 'canal-8' })).body;
+  const naCall = (
+    await api('/api/session-dev', { instance_id: TEST_INSTANCE, name: 'Vera', call: 'canal-9' })
+  ).body;
+  const outraCall = (
+    await api('/api/session-dev', { instance_id: TEST_INSTANCE, name: 'Ugo', call: 'canal-8' })
+  ).body;
 
   const callRoom = await api('/api/rooms/call', { identity: naCall.identity });
   check('quem esta na call entra direto', callRoom.status === 200);
@@ -207,7 +217,10 @@ const run = async () => {
     roomId: trancada.roomId,
     password: 'segredo',
   });
-  check('senha certa devolve tokens', senhaCerta.status === 200 && Boolean(senhaCerta.body.viewerToken));
+  check(
+    'senha certa devolve tokens',
+    senhaCerta.status === 200 && Boolean(senhaCerta.body.viewerToken),
+  );
 
   const salaAberta = await api('/api/rooms/join', {
     identity: bob.identity,
@@ -277,16 +290,20 @@ const run = async () => {
 
   // ===================================================================== relay
   const sala = (await api('/api/rooms/create', { identity: alice.identity, name: 'Relay' })).body;
-  const bobNaSala = (
-    await api('/api/rooms/join', { identity: bob.identity, roomId: sala.roomId })
-  ).body;
+  const bobNaSala = (await api('/api/rooms/join', { identity: bob.identity, roomId: sala.roomId }))
+    .body;
 
-  const semSalaWs = await open(`${WSB}/ws?t=${encodeURIComponent(alice.identity)}`).catch(() => null);
+  const semSalaWs = await open(`${WSB}/ws?t=${encodeURIComponent(alice.identity)}`).catch(
+    () => null,
+  );
   check('token de identidade nao abre WebSocket', semSalaWs === null);
 
   const viewer = await openViewer(sala);
   await sleep(100);
-  check('viewer recebe state ao entrar', viewer.recv.json.some((m) => m.type === 'state'));
+  check(
+    'viewer recebe state ao entrar',
+    viewer.recv.json.some((m) => m.type === 'state'),
+  );
   check('state identifica a sala e o dono', lastState(viewer).room?.ownerId === alice.user.id);
 
   const c1 = await openCaster(sala);
@@ -296,7 +313,10 @@ const run = async () => {
 
   c1.send(JSON.stringify({ type: 'start' }));
   c1.send(
-    JSON.stringify({ type: 'config', config: { codec: 'vp8', codedWidth: 1280, codedHeight: 720 } })
+    JSON.stringify({
+      type: 'config',
+      config: { codec: 'vp8', codedWidth: 1280, codedHeight: 720 },
+    }),
   );
   await sleep(120);
 
@@ -308,7 +328,7 @@ const run = async () => {
   await sleep(120);
   check(
     'watch entrega o config guardado',
-    viewer.recv.json.some((m) => m.type === 'config' && m.slot === slot1)
+    viewer.recv.json.some((m) => m.type === 'config' && m.slot === slot1),
   );
 
   c1.send(frame(slot1, false, 'DELTA-CEDO'));
@@ -333,7 +353,7 @@ const run = async () => {
   await sleep(120);
   check(
     'audio chega mesmo sem keyframe antes',
-    semKey.recv.bin.some((b) => b[1] === 3 && b.subarray(18).toString() === 'SOM-SEM-KEYFRAME')
+    semKey.recv.bin.some((b) => b[1] === 3 && b.subarray(18).toString() === 'SOM-SEM-KEYFRAME'),
   );
 
   semKey.send(JSON.stringify({ type: 'unwatch', slot: slot1 }));
@@ -353,7 +373,7 @@ const run = async () => {
 
   c2.send(JSON.stringify({ type: 'start' }));
   c2.send(
-    JSON.stringify({ type: 'config', config: { codec: 'vp8', codedWidth: 640, codedHeight: 480 } })
+    JSON.stringify({ type: 'config', config: { codec: 'vp8', codedWidth: 640, codedHeight: 480 } }),
   );
   await sleep(120);
   viewer.send(JSON.stringify({ type: 'watch', slot: slot2 }));
@@ -366,11 +386,14 @@ const run = async () => {
 
   c2.send(frame(slot1, true, 'FORJADO'));
   await sleep(80);
-  check('quadro com slot de outro transmissor e descartado', binsOfSlot(viewer, slot1).length === 1);
+  check(
+    'quadro com slot de outro transmissor e descartado',
+    binsOfSlot(viewer, slot1).length === 1,
+  );
 
   check(
     'state informa quem assiste cada stream',
-    lastState(viewer).streams.every((s) => Array.isArray(s.watchers))
+    lastState(viewer).streams.every((s) => Array.isArray(s.watchers)),
   );
 
   // -------------------------------------------------- parar de assistir
@@ -386,18 +409,19 @@ const run = async () => {
   await sleep(120);
   check(
     'rename normaliza espacos e propaga',
-    lastState(viewer).participants.some((p) => p.name === 'Alice Renomeada')
+    lastState(viewer).participants.some((p) => p.name === 'Alice Renomeada'),
   );
 
   viewer.send(JSON.stringify({ type: 'rename', name: 'x'.repeat(80) }));
   await sleep(100);
   check(
     'rename e limitado a 32 caracteres',
-    lastState(viewer).participants.some((p) => p.name.length === 32)
+    lastState(viewer).participants.some((p) => p.name.length === 32),
   );
 
   // ----------------------------------------------------- isolamento de sala
-  const outraSala = (await api('/api/rooms/create', { identity: bob.identity, name: 'Outra' })).body;
+  const outraSala = (await api('/api/rooms/create', { identity: bob.identity, name: 'Outra' }))
+    .body;
   const outroViewer = await openViewer(outraSala);
   await sleep(120);
   check('sala diferente nao vaza binarios', outroViewer.recv.bin.length === 0);
@@ -425,12 +449,14 @@ const run = async () => {
   const espectadorDeSlot2 = viewer;
 
   viewer.recv.json.length = 0;
-  anotador.send(JSON.stringify({ type: 'ann', slot: slot2, ev: { k: 'p', x: 100, y: 200, c: '#ff4d4f' } }));
+  anotador.send(
+    JSON.stringify({ type: 'ann', slot: slot2, ev: { k: 'p', x: 100, y: 200, c: '#ff4d4f' } }),
+  );
   await sleep(120);
   check('laser chega a quem assiste a mesma tela', anns(viewer, slot2).length === 1);
   check(
     'laser chega tambem a quem transmite',
-    c2.recv.json.some((m) => m.type === 'ann' && m.ev.k === 'p')
+    c2.recv.json.some((m) => m.type === 'ann' && m.ev.k === 'p'),
   );
 
   outroViewer.recv.json.length = 0;
@@ -461,14 +487,14 @@ const run = async () => {
   await sleep(150);
   check(
     'quem transmite desenha na propria tela sem assisti-la',
-    anns(espectadorDeSlot2, slot2).length === 1
+    anns(espectadorDeSlot2, slot2).length === 1,
   );
 
   dono2.send(JSON.stringify({ type: 'ann', slot: slot1, ev: { k: 'p', x: 9, y: 9 } }));
   await sleep(120);
   check(
     'mas so na dele: a tela do outro continua exigindo assistir',
-    anns(viewer, slot1).length === 0
+    anns(viewer, slot1).length === 0,
   );
   dono2.close();
 
@@ -478,7 +504,7 @@ const run = async () => {
       type: 'ann',
       slot: slot2,
       ev: { k: 's', id: 1, c: '#38bdf8', w: 10, pts: [10, 10, 20, 20] },
-    })
+    }),
   );
   anotador.send(JSON.stringify({ type: 'ann', slot: slot2, ev: { k: 'a', id: 1, pts: [30, 30] } }));
   await sleep(120);
@@ -493,7 +519,7 @@ const run = async () => {
   check(
     'o traco sincronizado vem inteiro',
     sync?.tracos?.[0]?.pts?.length === 6,
-    JSON.stringify(sync?.tracos?.[0]?.pts)
+    JSON.stringify(sync?.tracos?.[0]?.pts),
   );
 
   // Coordenada fora da grade e evento desconhecido nao podem virar estado.
@@ -510,7 +536,7 @@ const run = async () => {
   await sleep(120);
   check(
     'quem so assiste nao limpa o desenho dos outros',
-    !anns(viewer, slot2).some((m) => m.ev.k === 'ca')
+    !anns(viewer, slot2).some((m) => m.ev.k === 'ca'),
   );
 
   const depoisDoNao = await openViewer(sala);
@@ -519,7 +545,7 @@ const run = async () => {
   await sleep(150);
   check(
     'o desenho continua la depois da tentativa recusada',
-    depoisDoNao.recv.json.some((m) => m.type === 'ann-sync' && m.tracos.length === 1)
+    depoisDoNao.recv.json.some((m) => m.type === 'ann-sync' && m.tracos.length === 1),
   );
 
   // O viewer aqui e a Alice, dona da sala.
@@ -530,7 +556,7 @@ const run = async () => {
   await sleep(150);
   check(
     'quem criou a sala limpa a tela de todo mundo',
-    anns(viewer, slot2).some((m) => m.ev.k === 'ca')
+    anns(viewer, slot2).some((m) => m.ev.k === 'ca'),
   );
 
   const depoisDaLimpeza = await openViewer(sala);
@@ -539,12 +565,11 @@ const run = async () => {
   await sleep(150);
   check(
     'depois de limpar, quem entra nao recebe traco nenhum',
-    !depoisDaLimpeza.recv.json.some((m) => m.type === 'ann-sync')
+    !depoisDaLimpeza.recv.json.some((m) => m.type === 'ann-sync'),
   );
 
   [anotador, novato, depoisDoNao, depoisDaLimpeza].forEach((w) => w.close());
   await sleep(100);
-
 
   // ------------------------------------------------- parar de transmitir
   // Sair da sala precisa encerrar tambem a captura que roda na aba externa:
@@ -554,7 +579,7 @@ const run = async () => {
   await sleep(150);
   check(
     'stop-broadcast chega a aba de captura de quem pediu',
-    c1.recv.json.some((m) => m.type === 'stop-request')
+    c1.recv.json.some((m) => m.type === 'stop-request'),
   );
 
   // Cada um encerra so a sua: o servidor procura o transmissor pelo uid do
@@ -565,7 +590,7 @@ const run = async () => {
   await sleep(150);
   check(
     'stop-broadcast nao derruba a transmissao de outra pessoa',
-    !c2.recv.json.some((m) => m.type === 'stop-request')
+    !c2.recv.json.some((m) => m.type === 'stop-request'),
   );
 
   // --------------------------------------------- transmissao sem dono na sala
@@ -581,7 +606,7 @@ const run = async () => {
   check(
     'avatar com formato valido chega ao proxy',
     avatarOk.status === 404 || avatarOk.status === 502,
-    avatarOk.status === 404 ? 'hash inexistente responde 404' : 'CDN indisponivel responde 502'
+    avatarOk.status === 404 ? 'hash inexistente responde 404' : 'CDN indisponivel responde 502',
   );
 
   for (const rota of [
@@ -628,11 +653,13 @@ async function testarOrfao() {
     await esperarNoAr(`${base}/api/health`);
 
     const post = async (rota, corpo) =>
-      (await fetch(base + rota, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(corpo),
-      })).json();
+      (
+        await fetch(base + rota, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(corpo),
+        })
+      ).json();
 
     const dono = await post('/api/session-guest', { name: 'Dono' });
     const sala = await post('/api/rooms/create', { identity: dono.identity, name: 'Orfa' });
@@ -640,11 +667,10 @@ async function testarOrfao() {
 
     const atividade = await open(`${wsBase}/ws?t=${encodeURIComponent(sala.viewerToken)}`);
     const captura = await open(
-      `${wsBase}/ws?t=${encodeURIComponent(new URL(sala.shareUrl).searchParams.get('t'))}`
+      `${wsBase}/ws?t=${encodeURIComponent(new URL(sala.shareUrl).searchParams.get('t'))}`,
     );
     await sleep(200);
 
-    const slot = captura.recv.json.find((m) => m.type === 'slot')?.slot;
     captura.send(JSON.stringify({ type: 'start' }));
     await sleep(150);
 
@@ -654,7 +680,8 @@ async function testarOrfao() {
     await sleep(5000);
     check(
       'com a atividade aberta, a transmissao continua',
-      !captura.recv.json.some((m) => m.type === 'stop-request') && captura.readyState === WebSocket.OPEN
+      !captura.recv.json.some((m) => m.type === 'stop-request') &&
+        captura.readyState === WebSocket.OPEN,
     );
 
     // Fecha so a atividade — a aba de captura continua aberta, que e o caso
@@ -670,11 +697,12 @@ async function testarOrfao() {
     check(
       'sem ninguem do dono na sala, a captura recebe o pedido de parar',
       captura.recv.json.some((m) => m.type === 'stop-request'),
-      JSON.stringify(captura.recv.json.map((m) => m.type))
+      JSON.stringify(captura.recv.json.map((m) => m.type)),
     );
     check(
       'o pedido explica por que a transmissao caiu sozinha',
-      captura.recv.json.some((m) => m.type === 'stop-request' && /saiu da sala/i.test(m.reason ?? ''))
+      captura.recv.json.some((m) => m.type === 'stop-request' && /saiu/i.test(m.motivo ?? '')),
+      JSON.stringify(captura.recv.json.find((m) => m.type === 'stop-request')),
     );
     check('e o socket da captura e fechado, garantindo o fim', fechou);
 

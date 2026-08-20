@@ -125,7 +125,9 @@ export function buildAdminDashboard({ roomState, sockets, system, configuration 
       mediaBytesOut: user.mediaBytesOut,
       bufferedBytes: user.bufferedBytes,
     }))
-    .sort((a, b) => Number(b.broadcasting) - Number(a.broadcasting) || a.name.localeCompare(b.name));
+    .sort(
+      (a, b) => Number(b.broadcasting) - Number(a.broadcasting) || a.name.localeCompare(b.name),
+    );
 
   const guildList = [...guilds.values()]
     .map((guild) => ({

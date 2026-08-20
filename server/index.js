@@ -32,7 +32,14 @@ const {
 const PUBLIC_ORIGIN = ORIGEM_CRUA.replace(/[/]+$/, '');
 
 const isProd = NODE_ENV === 'production';
-const ADMIN_ID = String(DISCORD_ADMIN_ID).trim();
+// Mais de uma pessoa administra: separe os IDs por virgula. Um Set porque a
+// unica pergunta feita aqui e "este ID esta na lista".
+const ADMIN_IDS = new Set(
+  String(DISCORD_ADMIN_ID)
+    .split(/[\s,;]+/)
+    .filter(Boolean),
+);
+const TEM_ADMIN = ADMIN_IDS.size > 0;
 const ADMIN_COOKIE = 'discord_screen_admin';
 
 // Falha no arranque, não no primeiro pedido: subir sem segredo significa
@@ -43,7 +50,7 @@ if (isProd && !process.env.SESSION_SECRET) {
   process.exit(1);
 }
 
-if (ADMIN_ID && !process.env.SESSION_SECRET) {
+if (TEM_ADMIN && !process.env.SESSION_SECRET) {
   console.error('ERRO: SESSION_SECRET obrigatorio quando o painel admin esta ligado.');
   process.exit(1);
 }
@@ -52,40 +59,92 @@ if (ADMIN_ID && !process.env.SESSION_SECRET) {
 // curto é adivinhável fora daqui, sem deixar rastro no servidor: quem acertar
 // forja o cookie e entra como dono. O comando de configuração gera 64
 // caracteres; este piso só barra quem editou o .env na mão e pôs qualquer coisa.
-if (ADMIN_ID && process.env.SESSION_SECRET.length < 32) {
-  console.error('ERRO: SESSION_SECRET curto demais para o painel admin (minimo 32 caracteres).');
-  console.error('      Rode "npm run configurar" para gerar um seguro.');
+if (TEM_ADMIN && process.env.SESSION_SECRET.length < 32) {
+  // Nomeia a variavel e desmente o engano que ela ja causou: quem acabou de
+  // preencher o DISCORD_ADMIN_ID le "minimo 32" e conclui que o ID do Discord,
+  // de 18 digitos, e que esta curto. Nao e — sao duas variaveis diferentes.
+  console.error(
+    `ERRO: SESSION_SECRET curto demais (tem ${process.env.SESSION_SECRET.length}, precisa de 32+).`,
+  );
+  console.error('      Nao e o DISCORD_ADMIN_ID: o ID do Discord tem 18 digitos e esta certo.');
+  console.error(
+    `      Gere um: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`,
+  );
   process.exit(1);
 }
 
-if (ADMIN_ID && !/^[0-9]{15,21}$/.test(ADMIN_ID)) {
-  console.error('ERRO: DISCORD_ADMIN_ID invalido. Use o ID numerico da sua conta Discord.');
+for (const id of ADMIN_IDS) {
+  if (/^[0-9]{15,21}$/.test(id)) continue;
+  console.error(`ERRO: DISCORD_ADMIN_ID invalido: "${id}".`);
+  console.error(
+    '      Use o ID numerico da conta Discord (18 digitos). Varios: separe por virgula.',
+  );
   process.exit(1);
 }
 
 // Sem painel, ninguém lê as métricas — então nem começa a medir.
-if (ADMIN_ID) startSampling();
+if (TEM_ADMIN) startSampling();
 
 const app = express();
+
+// O proxy do Discord entrega as requisições da Activity sob o prefixo /.proxy.
+// Se ele chega até aqui, toda rota vira 404 e o cliente espera para sempre por
+// uma resposta que não vem — o sintoma é o "Está demorando…" do arranque, com
+// o servidor de pé e os logs limpos.
+//
+// Nem sempre chega: depende de como a hospedagem e o mapeamento de URL do
+// portal repassam o caminho. Tirar sempre custa uma comparação de string e faz
+// o servidor funcionar nos dois casos, em vez de depender de qual borda está na
+// frente. Fora da Activity nenhum caminho legítimo começa com /.proxy, então
+// para quem abre o site direto isto é inerte.
+//
+// O mesmo já era feito no upgrade do WebSocket, mais abaixo; faltava no HTTP.
+app.use((req, _res, next) => {
+  // Fronteira de caminho, não de texto: /.proxyable é outra rota, não esta
+  // com sufixo. Sem a barra, ela viraria /able em silêncio.
+  if (req.url === '/.proxy' || req.url.startsWith('/.proxy/')) {
+    req.url = req.url.slice('/.proxy'.length) || '/';
+    // originalUrl junto: é dele que o serve-static monta o Location de um
+    // redirecionamento, e sem atualizar ele mandaria a pessoa de volta ao
+    // caminho prefixado — um salto a mais para chegar no mesmo lugar.
+    req.originalUrl = req.url;
+  }
+  next();
+});
+
 app.use(express.json());
 
 // Uma Activity roda dentro de um iframe em <id>.discordsays.com, que por sua
 // vez está dentro do discord.com. Declarar essa cadeia é o que autoriza o
 // navegador a desenhar a página ali.
 //
-// Vale dizer o que aprendemos tentando hospedar isto num PaaS: se a borda da
-// hospedagem carimbar "X-Frame-Options: SAMEORIGIN" nas respostas, não há nada
-// a fazer daqui. O proxy do Discord repassa o X-Frame-Options da origem e
-// substitui o CSP pelo dele — então o frame-ancestors abaixo nem chega ao
-// navegador, e o que sobra é o carimbo da hospedagem barrando o iframe. O
-// sintoma é cruel: retângulo branco no Discord, log limpo, e o mesmo endereço
-// funcionando quando aberto direto. Se isso reaparecer, o problema é a borda
-// de quem hospeda, não este arquivo.
+// Havia aqui uma nota dizendo que, se a borda da hospedagem carimbasse
+// "X-Frame-Options: SAMEORIGIN", não haveria nada a fazer deste lado. Estava
+// errado, e o custo do engano foi um retângulo branco no Discord com log limpo
+// e o mesmo endereço funcionando quando aberto direto.
+//
+// O frame-ancestors realmente não resolve sozinho: o proxy do Discord repassa o
+// X-Frame-Options da origem sem repassar o nosso CSP, então quem decide é aquele
+// header. Só que dá para desarmá-lo mandando o nosso — "ALLOWALL" não existe no
+// padrão, e é justamente por isso que serve: diante de um valor que não
+// reconhece, o navegador descarta o header inteiro. Isso só funciona onde a
+// borda adiciona o dela apenas quando a origem não mandou nenhum; se ela
+// sobrescrever, aí sim não há conserto daqui.
+//
+// Não é buraco de segurança: quem restringe o embutimento é o frame-ancestors
+// acima, que tem precedência sobre o X-Frame-Options em qualquer navegador
+// atual. O que se perde é uma proteção que este servidor nunca enviou.
+//
+// O Cloudflare-Frame-Options é o pedido explícito para a borda não injetar o
+// dela. Fora de uma borda que o entenda é um header desconhecido, ignorado por
+// navegador e por proxy.
 app.use((_req, res, next) => {
   res.setHeader(
     'Content-Security-Policy',
-    "frame-ancestors 'self' https://discord.com https://*.discord.com https://*.discordsays.com"
+    "frame-ancestors 'self' https://discord.com https://*.discord.com https://*.discordsays.com",
   );
+  res.setHeader('X-Frame-Options', 'ALLOWALL');
+  res.setHeader('Cloudflare-Frame-Options', 'allow');
   next();
 });
 
@@ -99,7 +158,7 @@ app.use(
   express.static(path.join(__dirname, 'public'), {
     extensions: ['html'],
     setHeaders: (res) => res.setHeader('Cache-Control', 'no-store'),
-  })
+  }),
 );
 
 // Pipeline de transmissão compartilhado com a Activity. Ela o recebe pelo
@@ -108,7 +167,7 @@ app.use(
   '/shared',
   express.static(path.join(__dirname, '..', 'shared'), {
     setHeaders: (res) => res.setHeader('Cache-Control', 'no-store'),
-  })
+  }),
 );
 
 // ------------------------------------------------------------------ OAuth
@@ -123,7 +182,7 @@ app.post('/api/token', async (req, res) => {
   // recusa — e o erro dele não diz qual das duas está errada.
   if (client_id && DISCORD_CLIENT_ID && client_id !== DISCORD_CLIENT_ID) {
     console.error(
-      `[oauth] atividade e da aplicacao ${client_id}, mas o .env tem ${DISCORD_CLIENT_ID}`
+      `[oauth] atividade e da aplicacao ${client_id}, mas o .env tem ${DISCORD_CLIENT_ID}`,
     );
     return res.status(409).json({
       error:
@@ -214,7 +273,7 @@ app.post('/api/session', async (req, res) => {
       me.global_name || me.username,
       me.avatar ?? null,
       8 * 60 * 60,
-      verificado
+      verificado,
     );
 
     res.json({
@@ -247,11 +306,16 @@ app.post('/api/session', async (req, res) => {
 app.post('/api/session-dev', (req, res) => {
   if (isProd) return res.status(404).end();
   const { instance_id = 'dev', name = 'Dev', call = null } = req.body ?? {};
-  res.json(issueIdentity(instance_id, `dev-${name}`, name, null, 8 * 60 * 60, call ? { call } : {}));
+  res.json(
+    issueIdentity(instance_id, `dev-${name}`, name, null, 8 * 60 * 60, call ? { call } : {}),
+  );
 });
 
 app.post('/api/session-guest', (req, res) => {
-  const raw = String(req.body?.name ?? '').replace(/\s+/g, ' ').trim().slice(0, 32);
+  const raw = String(req.body?.name ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 32);
   const name = raw || `Convidado ${Math.floor(Math.random() * 9000 + 1000)}`;
   const uid = `guest-${crypto.randomBytes(8).toString('base64url')}`;
   res.json(issueIdentity(WEB_INSTANCE, uid, name, null, 30 * 24 * 60 * 60));
@@ -314,10 +378,9 @@ async function inVoiceChannel(guildId, channelId, userId) {
   if (!DISCORD_BOT_TOKEN || !guildId || !channelId) return 'indisponivel';
 
   try {
-    const r = await fetch(
-      `https://discord.com/api/v10/guilds/${guildId}/voice-states/${userId}`,
-      { headers: { Authorization: `Bot ${DISCORD_BOT_TOKEN}` } }
-    );
+    const r = await fetch(`https://discord.com/api/v10/guilds/${guildId}/voice-states/${userId}`, {
+      headers: { Authorization: `Bot ${DISCORD_BOT_TOKEN}` },
+    });
 
     if (r.status === 404) {
       // Dois 404 bem diferentes chegam aqui, e tratá-los igual trancava a
@@ -436,7 +499,7 @@ function issueRoomTokens(roomId, me) {
     roomId,
     viewerToken: signToken({ ...base, role: 'viewer' }),
     shareUrl: `${PUBLIC_ORIGIN}/share.html?t=${encodeURIComponent(
-      signToken({ ...base, role: 'broadcaster' })
+      signToken({ ...base, role: 'broadcaster' }),
     )}`,
   };
 }
@@ -534,6 +597,31 @@ app.post('/api/rooms/join', (req, res) => {
   res.json(issueRoomTokens(room.id, me));
 });
 
+/**
+ * Abre no site uma sala em que já se entrou pela atividade.
+ *
+ * O join normal não serve: a sala da call é recusada a quem não está no canal
+ * de voz, e uma sessão do site nunca está — é justamente isso que faz dela uma
+ * sala do Discord. Mas quem já entrou saiu de lá com um viewerToken assinado, e
+ * ele prova que a porta já se abriu uma vez para aquela pessoa.
+ *
+ * O token vale como ingresso, não como identidade emprestada: os tokens
+ * devolvidos sao reemitidos a partir do que está assinado dentro dele, entao
+ * ninguém troca de nome no caminho. E vale enquanto a sala existir — ela morre
+ * ao esvaziar, e o ingresso morre junto.
+ */
+app.post('/api/rooms/open', (req, res) => {
+  const ingresso = verifyToken(req.body?.token);
+  if (!ingresso?.room || ingresso.role !== 'viewer') {
+    return res.status(401).json({ error: 'Link inválido ou expirado.' });
+  }
+
+  const room = R.getRoom(ingresso.room);
+  if (!room) return res.status(404).json({ error: 'Sala não existe mais.' });
+
+  res.json({ ...issueRoomTokens(room.id, ingresso), name: room.name });
+});
+
 app.post('/api/rooms/password', (req, res) => {
   const me = identityOf(req, res);
   if (!me) return;
@@ -572,14 +660,14 @@ app.get('/auth/login', (_req, res) => {
 });
 
 app.get('/admin/auth/login', (_req, res) => {
-  if (!ADMIN_ID) return res.redirect('/admin?error=not_configured');
+  if (!TEM_ADMIN) return res.redirect('/admin?error=not_configured');
   if (!DISCORD_CLIENT_ID || !DISCORD_CLIENT_SECRET) {
     return res.redirect('/admin?error=discord_not_configured');
   }
 
   const state = signToken(
     { scope: 'oauth-state', target: 'admin', nonce: crypto.randomBytes(12).toString('base64url') },
-    10 * 60
+    10 * 60,
   );
   res.redirect(discordAuthorizeUrl(state).toString());
 });
@@ -616,7 +704,7 @@ app.get('/auth/callback', async (req, res) => {
     }
 
     if (adminFlow) {
-      if (me.id !== ADMIN_ID) return res.redirect('/admin?error=forbidden');
+      if (!ADMIN_IDS.has(me.id)) return res.redirect('/admin?error=forbidden');
 
       const adminSession = signToken(
         {
@@ -625,12 +713,12 @@ app.get('/auth/callback', async (req, res) => {
           name: me.global_name || me.username,
           av: me.avatar ?? null,
         },
-        8 * 60 * 60
+        8 * 60 * 60,
       );
       const secure = PUBLIC_ORIGIN.startsWith('https://') ? '; Secure' : '';
       res.setHeader(
         'Set-Cookie',
-        `${ADMIN_COOKIE}=${adminSession}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${8 * 60 * 60}${secure}`
+        `${ADMIN_COOKIE}=${adminSession}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${8 * 60 * 60}${secure}`,
       );
       return res.redirect('/admin');
     }
@@ -639,7 +727,7 @@ app.get('/auth/callback', async (req, res) => {
       WEB_INSTANCE,
       me.id,
       me.global_name || me.username,
-      me.avatar ?? null
+      me.avatar ?? null,
     );
 
     // No fragmento, não na query: o fragmento não é enviado ao servidor nem
@@ -668,7 +756,7 @@ function cookieOf(req, name) {
 
 function adminOf(req) {
   const session = verifyToken(cookieOf(req, ADMIN_COOKIE));
-  if (!session || session.scope !== 'admin' || !ADMIN_ID || session.uid !== ADMIN_ID) return null;
+  if (!session || session.scope !== 'admin' || !ADMIN_IDS.has(session.uid)) return null;
   return session;
 }
 
@@ -676,7 +764,7 @@ function requireAdmin(req, res, next) {
   const admin = adminOf(req);
   if (!admin) {
     res.setHeader('Cache-Control', 'no-store');
-    return res.status(401).json({ error: 'admin_required', configured: Boolean(ADMIN_ID) });
+    return res.status(401).json({ error: 'admin_required', configured: TEM_ADMIN });
   }
   req.admin = admin;
   res.setHeader('Cache-Control', 'no-store');
@@ -685,7 +773,7 @@ function requireAdmin(req, res, next) {
 
 app.get('/api/admin/me', (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
-  if (!ADMIN_ID) return res.status(503).json({ configured: false, error: 'not_configured' });
+  if (!TEM_ADMIN) return res.status(503).json({ configured: false, error: 'not_configured' });
   const admin = adminOf(req);
   if (!admin) return res.status(401).json({ configured: true, error: 'admin_required' });
   res.json({
@@ -698,7 +786,7 @@ app.post('/api/admin/logout', (_req, res) => {
   const secure = PUBLIC_ORIGIN.startsWith('https://') ? '; Secure' : '';
   res.setHeader(
     'Set-Cookie',
-    `${ADMIN_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`
+    `${ADMIN_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`,
   );
   res.setHeader('Cache-Control', 'no-store');
   res.json({ ok: true });
@@ -715,7 +803,7 @@ app.get('/api/admin/metrics', requireAdmin, (_req, res) => {
       publicOrigin: PUBLIC_ORIGIN,
       clientId: DISCORD_CLIENT_ID || null,
       botConfigured: Boolean(DISCORD_BOT_TOKEN),
-      adminId: ADMIN_ID,
+      adminIds: [...ADMIN_IDS],
       sessionSecretConfigured: Boolean(process.env.SESSION_SECRET),
     },
   });
@@ -762,12 +850,9 @@ app.use(
       // nome novo a cada build, então cachear para sempre é seguro.
       // O index.html aponta para eles e precisa ser sempre fresco.
       const hashed = filePath.includes(`${path.sep}assets${path.sep}`);
-      res.setHeader(
-        'Cache-Control',
-        hashed ? 'public, max-age=31536000, immutable' : 'no-store'
-      );
+      res.setHeader('Cache-Control', hashed ? 'public, max-age=31536000, immutable' : 'no-store');
     },
-  })
+  }),
 );
 
 app.get('*', (req, res, next) => {
@@ -802,12 +887,21 @@ server.on('upgrade', (req, socket, head) => {
     return;
   }
 
+  // A fonte não vai assinada, como `q` e `fps` também não vão: ela não
+  // concede nada. Quem tem o token já pode transmitir nesta sala — a fonte só
+  // rotula o stream e escolhe qual das duas vagas da pessoa é ocupada, e o teto
+  // por pessoa é imposto no registro, não aqui.
+  const pedida = url.searchParams.get('fonte');
+  const fonte = R.FONTES.has(pedida) ? pedida : 'tela';
+  // A aba de captura abre esta conexão ao carregar, antes de qualquer captura.
+  const controle = url.searchParams.get('modo') === 'controle';
+
   wss.handleUpgrade(req, socket, head, (ws) => {
-    wss.emit('connection', ws, req, payload);
+    wss.emit('connection', ws, req, payload, fonte, controle);
   });
 });
 
-wss.on('connection', (ws, _req, auth) => {
+wss.on('connection', (ws, _req, auth, fonte, controle) => {
   ws.__connectedAt = Date.now();
   ws.__rttMs = null;
   ws.__pingSentAt = null;
@@ -820,15 +914,39 @@ wss.on('connection', (ws, _req, auth) => {
     return;
   }
 
-  if (auth.role === 'broadcaster') {
-    handleBroadcaster(ws, room, { id: auth.uid, name: auth.name, avatar: auth.av ?? null });
+  if (auth.role === 'broadcaster' && controle) {
+    handleControl(ws, room, auth);
+  } else if (auth.role === 'broadcaster') {
+    handleBroadcaster(ws, room, { id: auth.uid, name: auth.name, avatar: auth.av ?? null }, fonte);
   } else {
     handleViewer(ws, room, auth);
   }
 });
 
-function handleBroadcaster(ws, room, info) {
-  const entry = R.attachBroadcaster(room, ws, info);
+/**
+ * A aba de captura, sem mídia nenhuma: só recebe recados.
+ *
+ * Ela não transmite por aqui — quando começa, abre uma conexão de transmissão
+ * separada, uma por fonte. Esta serve para a atividade alcançá-la enquanto
+ * ainda não há nada no ar, que é justamente quando o `broadcastersOf` não
+ * encontraria ninguém.
+ */
+function handleControl(ws, room, auth) {
+  R.attachControl(room, ws, auth.uid);
+  console.log(`[room ${room.id}] aba de captura de ${auth.name} conectada`);
+
+  R.broadcastState(room);
+
+  const sair = () => {
+    R.detachControl(room, ws);
+    R.broadcastState(room);
+  };
+  ws.on('close', sair);
+  ws.on('error', sair);
+}
+
+function handleBroadcaster(ws, room, info, fonte) {
+  const entry = R.attachBroadcaster(room, ws, info, fonte);
 
   if (typeof entry === 'string') {
     R.sendJson(ws, { type: 'error', message: entry });
@@ -836,7 +954,9 @@ function handleBroadcaster(ws, room, info) {
     return;
   }
 
-  console.log(`[room ${room.id}] broadcaster conectado: ${info.name} (slot ${entry.slot})`);
+  console.log(
+    `[room ${room.id}] broadcaster conectado: ${info.name} · ${fonte} (slot ${entry.slot})`,
+  );
 
   ws.on('message', (data, isBinary) => {
     if (isBinary) {
@@ -911,11 +1031,39 @@ function handleViewer(ws, room, auth) {
 
     // Encerrar a própria transmissão de dentro da Activity, sem ter que achar
     // a aba de captura. Cada um só encerra a sua.
+    // Ligar a outra fonte sem abrir uma segunda aba: quem já está transmitindo
+    // tem uma aba conectada, e é ela que consegue capturar. A atividade só
+    // pede; a aba decide o que dá para fazer sem gesto (câmera dá, tela não).
+    if (msg.type === 'start-broadcast' && R.FONTES.has(msg.fonte)) {
+      // Vai para a aba, e não para as conexões de transmissão: é ela quem tem o
+      // gesto do usuário e a permissão, e ela existe mesmo com nada no ar.
+      const n = R.toControls(room, auth.uid, {
+        type: 'start-request',
+        fonte: msg.fonte,
+        opcoes: msg.opcoes,
+      });
+      if (n) console.log(`[room ${room.id}] ${auth.name} pediu ${msg.fonte} à própria aba`);
+      return;
+    }
+
+    // Configuração trocada na engrenagem. Chega à aba na hora, sem esperar o
+    // próximo início: era o que fazia o resumo dela envelhecer em silêncio.
+    if (msg.type === 'config-broadcast' && msg.opcoes) {
+      R.toControls(room, auth.uid, { type: 'config-request', opcoes: msg.opcoes });
+      return;
+    }
+
     if (msg.type === 'stop-broadcast') {
-      const entry = R.broadcasterOf(room, auth.uid);
-      if (entry) {
-        R.sendJson(entry.ws, { type: 'stop-request' });
-        console.log(`[room ${room.id}] parada pedida por ${auth.name}`);
+      // Sem fonte, para tudo o que a pessoa estiver transmitindo. É o que o
+      // botão da barra sempre fez, e continua valendo para quem só tem uma.
+      const fonte = R.FONTES.has(msg.fonte) ? msg.fonte : null;
+      const alvos = R.broadcastersOf(room, auth.uid, fonte);
+
+      for (const entry of alvos) R.sendJson(entry.ws, { type: 'stop-request' });
+      if (alvos.length) {
+        console.log(
+          `[room ${room.id}] parada pedida por ${auth.name}: ${alvos.map((e) => e.fonte).join(', ')}`,
+        );
       }
     }
   });
@@ -949,6 +1097,11 @@ wss.on('connection', (ws) => {
     }
   });
 });
+
+// unref para o intervalo nao segurar o processo de pe sozinho: quem mantem o
+// programa vivo e a porta escutando, e quando ela fecha nao ha mais socket
+// para vigiar.
+heartbeat.unref?.();
 
 wss.on('close', () => clearInterval(heartbeat));
 
@@ -991,7 +1144,7 @@ function avisarBuildVelho() {
     const fonte = Math.max(
       maisRecente(path.join(raiz, 'client', 'src')),
       maisRecente(path.join(raiz, 'client', 'index.html')),
-      maisRecente(path.join(raiz, 'shared'))
+      maisRecente(path.join(raiz, 'shared')),
     );
     if (fonte <= build) return;
 
@@ -1021,7 +1174,7 @@ server.listen(PORT, () => {
     console.log('  Para usar dentro do Discord, rode: npm run configurar');
   }
 
-  if (ADMIN_ID) {
+  if (TEM_ADMIN) {
     console.log(`  Painel administrativo: ${local}/admin`);
     if (PUBLIC_ORIGIN !== local) console.log(`  Painel publico: ${PUBLIC_ORIGIN}/admin`);
   } else {
@@ -1047,3 +1200,11 @@ server.listen(PORT, () => {
 
   console.log('');
 });
+
+/**
+ * Publicado para o teste, que importa o servidor no proprio processo em vez de
+ * gerar outro: so assim a cobertura enxerga as linhas que rodaram. Com PORT=0
+ * o sistema escolhe uma porta livre, e o endereco real sai de
+ * `server.address()` — nada aqui precisa saber que esta sob teste.
+ */
+export { app, server, wss };

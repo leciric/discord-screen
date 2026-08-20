@@ -79,7 +79,7 @@ export function createPlayer(canvas, { onError, onTamanho } = {}) {
           type: isKeyframe ? 'key' : 'delta',
           timestamp,
           data: new Uint8Array(buffer, 18),
-        })
+        }),
       );
       needKeyframe = false;
     } catch (err) {
@@ -116,7 +116,9 @@ export function createPlayer(canvas, { onError, onTamanho } = {}) {
     if (decoder && decoder.state !== 'closed') {
       try {
         decoder.close();
-      } catch {}
+      } catch {
+        // Fechar o que já se fechou sozinho lança; não há nada a desfazer.
+      }
     }
     decoder = null;
     needKeyframe = true;

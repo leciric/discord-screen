@@ -19,6 +19,11 @@ function readText(file) {
 }
 
 function finiteNumber(value) {
+  // Number(null) e Number('') sao 0, e 0 e finito: sem esta guarda um arquivo
+  // de cgroup ausente virava "0 bytes de memoria" no painel, indistinguivel de
+  // uma medida de verdade — e a saida antecipada de cgroupSnapshot, que existe
+  // para dizer "nao ha cgroup aqui", nunca disparava fora de um container.
+  if (value === null || value === undefined || value === '') return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
@@ -176,11 +181,11 @@ function sample() {
       ? {
           receivedBytesPerSecond: Math.max(
             0,
-            (network.receivedBytes - previousNetwork.receivedBytes) / elapsedSeconds
+            (network.receivedBytes - previousNetwork.receivedBytes) / elapsedSeconds,
           ),
           transmittedBytesPerSecond: Math.max(
             0,
-            (network.transmittedBytes - previousNetwork.transmittedBytes) / elapsedSeconds
+            (network.transmittedBytes - previousNetwork.transmittedBytes) / elapsedSeconds,
           ),
         }
       : { receivedBytesPerSecond: null, transmittedBytesPerSecond: null };

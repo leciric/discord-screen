@@ -17,6 +17,12 @@
 import crypto from 'node:crypto';
 
 const MAX_BROADCASTERS = 4;
+// Duas por pessoa: a tela e a câmera. O teto da sala continua valendo por cima,
+// então duas pessoas com as duas fontes já lotam.
+const MAX_POR_PESSOA = 2;
+
+/** As fontes que uma transmissão pode ter. */
+export const FONTES = new Set(['tela', 'camera']);
 // Sala é objeto em memória criado por qualquer pessoa autenticada: sem teto,
 // um laço de "criar sala" consome a RAM do processo.
 const MAX_ROOMS_PER_INSTANCE = 20;
@@ -29,26 +35,16 @@ const MAX_ROOM_NAME = 40;
 // 12s cobre um reload com folga e some rápido o bastante para não deixar sala
 // fantasma na lista.
 const EMPTY_GRACE_MS = 12 * 1000;
+// Quanto tempo a transmissão de alguém sobrevive à saída dessa pessoa da sala.
+// Existe pelo mesmo motivo da carência acima: recarregar a atividade desconecta
+// e reconecta, e sem ela um F5 derrubaria a transmissão de quem não saiu de
+// lugar nenhum. Quinze segundos cobrem com folga o relogin do Discord, que o
+// próprio arranque já considera demorado a partir de oito.
+//
+// A variável de ambiente existe para o teste não ficar quinze segundos parado.
+// Em uso normal ninguém mexe nisto.
+const SEM_PRESENCA_MS = Number(process.env.BROADCAST_ORPHAN_MS) || 15 * 1000;
 const SWEEP_EVERY_MS = 4 * 1000;
-
-/**
- * Quanto tempo uma transmissão sobrevive sem o dono na sala.
- *
- * A captura roda numa aba do navegador com conexão própria, que não sabe nada
- * do Discord: fechar a atividade, sair da call ou fechar o Discord inteiro não
- * chega até ela, e a tela continuava indo para uma sala que a pessoa já tinha
- * deixado. Quem percebe é o servidor, que vê o socket da atividade cair e
- * ninguém daquele dono voltar.
- *
- * A carência existe pelo mesmo motivo da EMPTY_GRACE_MS: recarregar a atividade
- * desconecta e reconecta, e sem ela um F5 derrubaria a transmissão. Quinze
- * segundos cobrem com folga o relogin do Discord, que o próprio arranque já
- * considera demorado a partir de oito.
- *
- * A variável de ambiente existe para o teste não ficar quinze segundos parado.
- * Em uso normal ninguém mexe nisto.
- */
-const ORFAO_GRACE_MS = Number(process.env.BROADCAST_ORPHAN_MS) || 15 * 1000;
 
 // Freio de força bruta: sem isso uma senha curta cai em segundos, porque o
 // endpoint responde tão rápido quanto a rede permite.
@@ -160,6 +156,51 @@ function trafficSnapshot(counter, windowSeconds = 5) {
   };
 }
 
+// Uma pessoa pode ter duas transmissões ao mesmo tempo, então o uid sozinho não
+// identifica mais uma delas. A chave composta mantém o acesso direto que o
+// registro sempre teve, sem virar um Map de Maps.
+const chaveDe = (uid, fonte) => `${uid}|${fonte}`;
+
+/** As transmissões de uma pessoa, de uma fonte só quando `fonte` vem. */
+export function broadcastersOf(room, userId, fonte = null) {
+  return [...room.broadcasters.values()].filter(
+    (e) => e.info.id === userId && (!fonte || e.fonte === fonte),
+  );
+}
+
+const transmitindo = (room, userId) => broadcastersOf(room, userId).length > 0;
+
+/**
+ * A aba de captura, ligada desde que carrega e antes de qualquer transmissão.
+ *
+ * Existe porque a atividade precisa falar com ela justamente quando não há nada
+ * no ar: mudar a qualidade, ou pedir a tela — que só nasce de um clique lá. A
+ * conexão de transmissão não serve para isso, porque só é aberta depois que a
+ * captura foi concedida.
+ *
+ * Não ocupa slot, não entra na contagem de pessoas e não segura a sala de pé:
+ * uma aba esquecida aberta não pode manter viva uma sala que todo mundo já
+ * deixou.
+ */
+export function attachControl(room, ws, userId) {
+  ws.__controlOf = userId;
+  room.controles.add(ws);
+}
+
+export function detachControl(room, ws) {
+  room.controles.delete(ws);
+}
+
+/** Manda um recado para as abas de captura de uma pessoa. */
+export function toControls(room, userId, obj) {
+  let entregues = 0;
+  for (const ws of room.controles) {
+    if (ws.__controlOf !== userId) continue;
+    if (sendJson(ws, obj)) entregues++;
+  }
+  return entregues;
+}
+
 // ------------------------------------------------------------------- senha
 
 function hashPassword(password, salt = crypto.randomBytes(16)) {
@@ -239,7 +280,9 @@ export function createRoom({
     return { error: 'Limite de salas abertas atingido. Feche uma antes de criar outra.' };
   }
 
-  const escolhido = String(name ?? '').replace(/\s+/g, ' ').trim();
+  const escolhido = String(name ?? '')
+    .replace(/\s+/g, ' ')
+    .trim();
   // Nome é opcional: sem ele, um baseado em quem criou.
   const clean = (escolhido || `Sala de ${ownerName}`).slice(0, MAX_ROOM_NAME);
 
@@ -262,6 +305,7 @@ export function createRoom({
     broadcasters: new Map(),
     slots: new Map(),
     viewers: new Set(),
+    controles: new Set(),
     droppedChunks: 0,
     traffic: trafficCounter(),
   };
@@ -308,6 +352,7 @@ export function ensureCallRoom(instance, id, metadata = {}) {
     broadcasters: new Map(),
     slots: new Map(),
     viewers: new Set(),
+    controles: new Set(),
     droppedChunks: 0,
     traffic: trafficCounter(),
   };
@@ -341,7 +386,7 @@ export function listRooms(instance) {
 function countPeople(room) {
   const ids = new Set();
   for (const v of room.viewers) if (v.__info) ids.add(v.__info.id);
-  for (const uid of room.broadcasters.keys()) ids.add(uid);
+  for (const e of room.broadcasters.values()) ids.add(e.info.id);
   return ids.size;
 }
 
@@ -351,10 +396,71 @@ function countPeople(room) {
  * A carência existe porque recarregar a atividade desconecta e reconecta: sem
  * ela, quem estivesse sozinho perderia a sala a cada F5.
  */
+/**
+ * Encerra a transmissão de quem já não está mais na sala.
+ *
+ * A aba de captura tem conexão própria: fechar a atividade não a alcança, e a
+ * tela continua indo para quem ficou — sem a pessoa estar vendo, e sem nada na
+ * frente dela dizendo que ainda está no ar. Isso é vazamento de tela, não
+ * detalhe de interface, então quem decide é o servidor, que é o único lado que
+ * enxerga as duas conexões.
+ *
+ * O `stop-request` faz a aba encerrar por conta própria e dizer o motivo. O
+ * `detachBroadcaster` vem junto e não depende dela: uma aba travada, ou que
+ * perdeu o socket, não pode continuar segurando a tela no ar.
+ */
+function derrubarAbandonadas(room, now) {
+  marcarSemDono(room, now);
+
+  // Cópia da lista: encerrar tira o transmissor do registro, e não se altera o
+  // que se está percorrendo.
+  for (const entry of [...room.broadcasters.values()]) {
+    if (entry.semDonoDesde === null || now - entry.semDonoDesde <= SEM_PRESENCA_MS) continue;
+
+    sendJson(entry.ws, {
+      type: 'stop-request',
+      motivo: 'Você saiu da atividade, então a transmissão parou.',
+    });
+    console.log(`[room ${room.id}] ${entry.info.name} saiu da sala — ${entry.fonte} encerrada`);
+    detachBroadcaster(room, entry.ws);
+
+    // Pedir é o caminho educado; fechar é o que garante. `detachBroadcaster`
+    // tira a transmissão do relay, mas quem ainda segura a tela é a aba — e uma
+    // aba em segundo plano pode demorar a reagir à mensagem. Fechar o socket a
+    // derruba pelo tratamento de queda que o próprio transmissor já tem, e é
+    // isso que faz a captura parar de verdade em vez de só parar de ser
+    // repassada.
+    entry.ws.close();
+  }
+}
+
+/**
+ * Marca desde quando cada transmissão está sem o dono na sala.
+ *
+ * Chamada também quando uma conexão cai e quando outra entra, e não só pela
+ * varredura: o relógio precisa começar no instante em que a pessoa sai, não na
+ * passada seguinte. São até quatro segundos de diferença, e eles são de tela
+ * exposta. Pela mesma razão, quem volta zera o relógio na hora — é o que faz um
+ * F5 na atividade não custar a transmissão.
+ */
+function marcarSemDono(room, now = Date.now()) {
+  if (!room.broadcasters.size) return;
+
+  // Um Set, e não uma varredura dos espectadores por transmissão: com câmera e
+  // tela no ar, a mesma sala tem várias entradas do mesmo dono.
+  const presentes = new Set();
+  for (const v of room.viewers) if (v.__info) presentes.add(v.__info.id);
+
+  for (const entry of room.broadcasters.values()) {
+    if (presentes.has(entry.info.id)) entry.semDonoDesde = null;
+    else if (entry.semDonoDesde === null) entry.semDonoDesde = now;
+  }
+}
+
 const sweeper = setInterval(() => {
   const now = Date.now();
   for (const room of rooms.values()) {
-    encerrarOrfaos(room, now);
+    derrubarAbandonadas(room, now);
 
     const empty = room.viewers.size === 0 && room.broadcasters.size === 0;
 
@@ -367,65 +473,23 @@ const sweeper = setInterval(() => {
       continue;
     }
     if (now - room.emptySince > EMPTY_GRACE_MS) {
+      // As abas de captura não seguram a sala de pé, mas continuam ligadas a
+      // ela — e essa é a única conexão que sobrevive a este ponto, justamente
+      // porque ficou de fora da conta de vazio. Sem fechar aqui, ela segue
+      // aberta contra um objeto que ninguém mais alcança: não recebe mais nada,
+      // e como não há `close`, a aba nem tenta reconectar.
+      for (const ws of room.controles) {
+        sendJson(ws, { type: 'room-gone' });
+        ws.close();
+      }
+      room.controles.clear();
+
       rooms.delete(room.id);
       console.log(`[room ${room.id}] fechada por inatividade`);
     }
   }
 }, SWEEP_EVERY_MS);
 sweeper.unref?.();
-
-/**
- * Encerra a transmissão de quem não está mais na sala.
- *
- * "Estar na sala" é ter pelo menos uma conexão de espectador — é ela que a
- * atividade abre, e é ela que morre quando a pessoa fecha a atividade, sai do
- * canal de voz ou fecha o Discord. A aba de captura sozinha não conta: ela é
- * uma janela do navegador que não faz ideia de nada disso, e era exatamente por
- * isso que a tela continuava no ar.
- *
- * Fechar o socket não é rispidez: a mensagem é o caminho educado, mas uma aba
- * em segundo plano pode demorar a reagir a ela, e o fechamento derruba a
- * captura pelo tratamento de queda que o transmissor já tem. Entre insistir e
- * deixar a tela de alguém exposta, fecha-se.
- */
-function encerrarOrfaos(room, now) {
-  marcarOrfaos(room, now);
-
-  // Cópia da lista: encerrar tira o transmissor do registro, e não se altera o
-  // que se está percorrendo.
-  for (const entry of [...room.broadcasters.values()]) {
-    if (!entry.orfaoDesde || now - entry.orfaoDesde < ORFAO_GRACE_MS) continue;
-
-    console.log(`[room ${room.id}] transmissao de ${entry.info.name} encerrada: saiu da sala`);
-    sendJson(entry.ws, {
-      type: 'stop-request',
-      reason: 'Você saiu da sala, então a transmissão foi encerrada. A captura parou.',
-    });
-    // Antes de fechar: sai do registro na hora, senão a próxima passada da
-    // varredura o encontraria de novo enquanto o socket ainda se despede.
-    detachBroadcaster(room, entry.ws);
-    entry.ws.close();
-  }
-}
-
-/**
- * Marca desde quando cada transmissão está sem o dono na sala.
- *
- * Chamada quando uma conexão cai e quando outra entra, além da varredura: o
- * relógio precisa começar no instante em que a pessoa sai, não na próxima
- * passada. São quatro segundos de diferença, e eles são de tela exposta.
- */
-function marcarOrfaos(room, now = Date.now()) {
-  if (!room.broadcasters.size) return;
-
-  const presentes = new Set();
-  for (const v of room.viewers) if (v.__info) presentes.add(v.__info.id);
-
-  for (const entry of room.broadcasters.values()) {
-    if (presentes.has(entry.info.id)) entry.orfaoDesde = null;
-    else if (!entry.orfaoDesde) entry.orfaoDesde = now;
-  }
-}
 
 // -------------------------------------------------------------------- envio
 
@@ -472,15 +536,18 @@ function roomState(room) {
     id: info.id,
     name: info.name,
     avatar: info.avatar ?? null,
-    broadcasting: room.broadcasters.has(info.id),
+    broadcasting: transmitindo(room, info.id),
   }));
 
   // Quem transmite pode ter fechado a aba da Activity: continua na lista,
-  // senão o vídeo fica sem dono visível.
-  for (const [uid, entry] of room.broadcasters) {
-    if (byId.has(uid)) continue;
+  // senão o vídeo fica sem dono visível. O `vistos` importa agora que a mesma
+  // pessoa pode ter duas transmissões — sem ele, apareceria duplicada.
+  const vistos = new Set(byId.keys());
+  for (const entry of room.broadcasters.values()) {
+    if (vistos.has(entry.info.id)) continue;
+    vistos.add(entry.info.id);
     participants.push({
-      id: uid,
+      id: entry.info.id,
       name: entry.info.name,
       avatar: entry.info.avatar ?? null,
       broadcasting: true,
@@ -489,15 +556,26 @@ function roomState(room) {
 
   participants.sort((a, b) => Number(b.broadcasting) - Number(a.broadcasting));
 
+  // Quem tem aba de captura aberta. É o que permite à atividade saber se pode
+  // falar com ela em vez de abrir outra — antes isso era deduzido do que estava
+  // no ar, e uma aba ainda parada não aparecia em lugar nenhum.
+  const abas = [...new Set([...room.controles].map((ws) => ws.__controlOf))];
+
   return {
     type: 'state',
+    abas,
     room: { id: room.id, name: room.name, ownerId: room.ownerId, locked: Boolean(room.password) },
     broadcasting: room.broadcasters.size > 0,
     viewers: room.viewers.size,
     participants,
     streams: [...room.broadcasters.values()]
       .filter((e) => e.streaming)
-      .map((e) => ({ slot: e.slot, userId: e.info.id, watchers: watchersOf(room, e.slot) })),
+      .map((e) => ({
+        slot: e.slot,
+        userId: e.info.id,
+        fonte: e.fonte,
+        watchers: watchersOf(room, e.slot),
+      })),
   };
 }
 
@@ -518,8 +596,9 @@ export function rename(room, ws, raw) {
   if (!name) return;
 
   ws.__info.name = name;
-  const entry = room.broadcasters.get(ws.__info.id);
-  if (entry) entry.info.name = name;
+  // Todas as transmissões da pessoa, não "a" transmissão: quem divide tela e
+  // câmera tem duas, e renomear só uma deixaria o grid com dois nomes.
+  for (const entry of broadcastersOf(room, ws.__info.id)) entry.info.name = name;
   broadcastState(room);
 }
 
@@ -533,8 +612,19 @@ function freeSlot(room) {
 }
 
 /** Retorna a entry criada, ou uma string com o motivo da recusa. */
-export function attachBroadcaster(room, ws, info) {
-  if (room.broadcasters.has(info.id)) return 'Você já está transmitindo nesta sala.';
+export function attachBroadcaster(room, ws, info, fonte = 'tela') {
+  const chave = chaveDe(info.id, fonte);
+
+  // A recusa nomeia a fonte: "você já está transmitindo" era claro quando só
+  // havia uma, mas com duas deixaria a pessoa sem saber qual delas repetiu.
+  if (room.broadcasters.has(chave)) {
+    return fonte === 'camera'
+      ? 'Você já está transmitindo a câmera nesta sala.'
+      : 'Você já está transmitindo a tela nesta sala.';
+  }
+  if (broadcastersOf(room, info.id).length >= MAX_POR_PESSOA) {
+    return `Limite de ${MAX_POR_PESSOA} transmissões por pessoa atingido.`;
+  }
   if (room.broadcasters.size >= MAX_BROADCASTERS) {
     return `Limite de ${MAX_BROADCASTERS} transmissões simultâneas atingido.`;
   }
@@ -545,8 +635,12 @@ export function attachBroadcaster(room, ws, info) {
   const entry = {
     ws,
     info,
+    fonte,
+    chave,
     slot,
     streaming: false,
+    // Desde quando quem transmite não está mais na sala. Null enquanto está.
+    semDonoDesde: null,
     config: null,
     audioConfig: null,
     connectedAt: Date.now(),
@@ -554,10 +648,8 @@ export function attachBroadcaster(room, ws, info) {
     traffic: trafficCounter(),
     droppedChunks: 0,
     ann: novaAnn(),
-    // Desde quando não há ninguém deste dono na sala. Ver encerrarOrfaos.
-    orfaoDesde: null,
   };
-  room.broadcasters.set(info.id, entry);
+  room.broadcasters.set(chave, entry);
   room.slots.set(slot, entry);
   ws.__entry = entry;
   room.emptySince = null;
@@ -580,7 +672,12 @@ export function startStream(room, entry) {
     v.__primed?.delete(entry.slot);
     v.__watching?.delete(entry.slot);
   }
-  toViewers(room, { type: 'stream-start', slot: entry.slot, userId: entry.info.id });
+  toViewers(room, {
+    type: 'stream-start',
+    slot: entry.slot,
+    userId: entry.info.id,
+    fonte: entry.fonte,
+  });
   broadcastState(room);
 }
 
@@ -695,16 +792,12 @@ export function stopStream(room, entry) {
 
 export function detachBroadcaster(room, ws) {
   const entry = ws.__entry;
-  if (!entry || room.broadcasters.get(entry.info.id) !== entry) return;
+  if (!entry || room.broadcasters.get(entry.chave) !== entry) return;
 
   stopStream(room, entry);
-  room.broadcasters.delete(entry.info.id);
+  room.broadcasters.delete(entry.chave);
   room.slots.delete(entry.slot);
   broadcastState(room);
-}
-
-export function broadcasterOf(room, userId) {
-  return room.broadcasters.get(userId) ?? null;
 }
 
 // --------------------------------------------------------------- espectador
@@ -982,14 +1075,19 @@ export function attachViewer(room, ws, info) {
   room.emptySince = null;
   // Quem voltou zera o relógio do órfão na hora — é o que faz um F5 na
   // atividade não custar a transmissão.
-  marcarOrfaos(room);
+  marcarSemDono(room);
 
   sendJson(ws, roomState(room));
 
   // Anuncia o que está no ar, sem começar a mandar quadros: assistir é opt-in.
   for (const entry of room.broadcasters.values()) {
     if (!entry.streaming) continue;
-    sendJson(ws, { type: 'stream-start', slot: entry.slot, userId: entry.info.id });
+    sendJson(ws, {
+      type: 'stream-start',
+      slot: entry.slot,
+      userId: entry.info.id,
+      fonte: entry.fonte,
+    });
   }
 
   broadcastState(room);
@@ -997,8 +1095,8 @@ export function attachViewer(room, ws, info) {
 
 export function detachViewer(room, ws) {
   room.viewers.delete(ws);
-  // Saiu agora: o relógio começa agora. Ver marcarOrfaos.
-  marcarOrfaos(room);
+  // Saiu agora: o relógio começa agora. Ver marcarSemDono.
+  marcarSemDono(room);
   broadcastState(room);
 }
 

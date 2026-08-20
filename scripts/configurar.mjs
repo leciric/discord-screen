@@ -38,7 +38,8 @@ async function perguntar(rotulo, { padrao = '', valida } = {}) {
   }
 }
 
-const encurtar = (texto) => (texto.length > 24 ? `${texto.slice(0, 10)}…${texto.slice(-6)}` : texto);
+const encurtar = (texto) =>
+  texto.length > 24 ? `${texto.slice(0, 10)}…${texto.slice(-6)}` : texto;
 
 // --------------------------------------------------------------------- fluxo
 
@@ -105,7 +106,8 @@ const DISCORD_CLIENT_ID = await perguntar('Client ID', {
 
 const DISCORD_CLIENT_SECRET = await perguntar('Client Secret', {
   padrao: atual.DISCORD_CLIENT_SECRET,
-  valida: (v) => (v.length >= 20 ? null : 'O Secret é bem mais longo que isso. Confira e cole de novo.'),
+  valida: (v) =>
+    v.length >= 20 ? null : 'O Secret é bem mais longo que isso. Confira e cole de novo.',
 });
 
 // Opcional de propósito: sem o token tudo continua funcionando, então travar a
@@ -144,19 +146,31 @@ nota('  Cole aqui o ID da SUA CONTA do Discord. Não é o Client ID de cima:');
 nota('  os dois são números parecidos, e o errado só falha na hora de entrar.');
 nota('  No Discord (não no portal): Configurações → Avançado → Modo');
 nota('  desenvolvedor. Depois botão direito no seu nome → "Copiar ID".');
-nota('  Só essa conta abre o painel. Enter pula; um traço ("-") desliga.');
+nota('  Mais de uma pessoa administra? Separe os IDs por vírgula.');
+nota('  Só essas contas abrem o painel. Enter pula; um traço ("-") desliga.');
 linha();
+
+/** Os IDs do painel, separados como o servidor os separa. */
+const idsDoPainel = (v) =>
+  String(v)
+    .split(/[\s,;]+/)
+    .filter(Boolean);
 
 const respostaAdmin = await perguntar('Seu ID do Discord (opcional)', {
   padrao: atual.DISCORD_ADMIN_ID,
   valida: (v) => {
     if (!v || v === '-') return null;
-    if (!/^[0-9]{15,21}$/.test(v)) return 'O ID é só números (uns 19). Confira e cole de novo.';
-    // O engano provável é colar de novo o Client ID logo acima. O servidor
-    // aceitaria — é um número válido —, e aí nenhum login jamais bateria,
-    // porque aquele id é da aplicação e não de uma conta.
-    if (v === DISCORD_CLIENT_ID) {
-      return 'Esse é o Client ID da aplicação, não o da sua conta. O painel nunca deixaria você entrar.';
+
+    for (const id of idsDoPainel(v)) {
+      if (!/^[0-9]{15,21}$/.test(id)) {
+        return `"${id}" não parece um ID: são só números, uns 19. Confira e cole de novo.`;
+      }
+      // O engano provável é colar de novo o Client ID logo acima. O servidor
+      // aceitaria — é um número válido —, e aí nenhum login jamais bateria,
+      // porque aquele id é da aplicação e não de uma conta.
+      if (id === DISCORD_CLIENT_ID) {
+        return 'Esse é o Client ID da aplicação, não o da sua conta. O painel nunca deixaria você entrar.';
+      }
     }
     return null;
   },
@@ -164,7 +178,7 @@ const respostaAdmin = await perguntar('Seu ID do Discord (opcional)', {
 
 // O traço é a única saída: com um valor guardado, o Enter devolve o valor
 // guardado, e sem isto ninguém desligaria o painel sem editar o .env na mão.
-const DISCORD_ADMIN_ID = respostaAdmin === '-' ? '' : respostaAdmin;
+const DISCORD_ADMIN_ID = respostaAdmin === '-' ? '' : idsDoPainel(respostaAdmin).join(',');
 
 // O servidor se recusa a subir com o painel ligado e um segredo curto, e a
 // mensagem manda rodar este assistente — que preservava o segredo curto e caía
@@ -247,7 +261,9 @@ nota('     Não esqueça o "Save Changes" no rodapé da página.');
 
 linha(`\n  ${cor.forte}3.${cor.fim} Abra este link para instalar a aplicação no seu servidor:`);
 linha();
-linha(`        ${cor.verde}https://discord.com/oauth2/authorize?client_id=${DISCORD_CLIENT_ID}${cor.fim}`);
+linha(
+  `        ${cor.verde}https://discord.com/oauth2/authorize?client_id=${DISCORD_CLIENT_ID}${cor.fim}`,
+);
 
 titulo(`  ${cor.verde}Feito o que está acima, é só rodar:${cor.fim}`);
 linha();

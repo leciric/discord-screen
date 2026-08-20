@@ -60,7 +60,6 @@ export function criarCamada(canvas, { vista }) {
   const tracos = new Map(); // id -> { uid, name, color, width, pts }
   const lasers = new Map(); // uid -> { name, color, trilha: [{x,y,t}] }
 
-  let sujo = true;
   let quadro = null;
   // Escondido é só aqui: o estado continua chegando e sendo guardado, então
   // voltar a mostrar traz tudo de volta sem pedir nada a ninguém.
@@ -162,7 +161,6 @@ export function criarCamada(canvas, { vista }) {
   // ----------------------------------------------------------------- pintura
 
   function marcar() {
-    sujo = true;
     if (quadro === null && typeof requestAnimationFrame === 'function') {
       quadro = requestAnimationFrame(pintar);
     }
@@ -183,7 +181,6 @@ export function criarCamada(canvas, { vista }) {
     if (!v || !v.boxW || !v.boxH) {
       // Sem caixa não há o que pintar, mas o estado continua vivo: quando o
       // tile voltar ao palco, uma marcação nova traz tudo de volta.
-      sujo = true;
       return;
     }
 
@@ -212,7 +209,6 @@ export function criarCamada(canvas, { vista }) {
       else lasers.delete(uid);
     }
 
-    sujo = false;
     // Laser vivo se move e desbota sozinho: enquanto houver um, o próximo
     // quadro já está pedido. Traço parado não redesenha nada.
     if (animando) marcar();

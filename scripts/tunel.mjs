@@ -69,7 +69,14 @@ export async function abrirTunel({ aoEndereco = () => {}, rapido = false, gravar
   // ./cloudflared.mjs.
   const args = config
     ? ['--config', config, 'tunnel', '--no-autoupdate', 'run']
-    : ['--config', configNeutro(), 'tunnel', '--no-autoupdate', '--url', `http://localhost:${porta}`];
+    : [
+        '--config',
+        configNeutro(),
+        'tunnel',
+        '--no-autoupdate',
+        '--url',
+        `http://localhost:${porta}`,
+      ];
 
   const cloudflared = await garantirCloudflared();
 
@@ -90,7 +97,9 @@ export async function abrirTunel({ aoEndereco = () => {}, rapido = false, gravar
 
     if (origem && origem !== env.PUBLIC_ORIGIN) {
       gravarEnv({ PUBLIC_ORIGIN: origem });
-      console.log(`${cor.amarelo}  O .env apontava para outro endereço — corrigi para o do túnel.${cor.fim}`);
+      console.log(
+        `${cor.amarelo}  O .env apontava para outro endereço — corrigi para o do túnel.${cor.fim}`,
+      );
     }
 
     console.log(`${cor.verde}  ${origem || '(endereço definido no config do túnel)'}${cor.fim}\n`);
@@ -160,42 +169,61 @@ function configNeutro() {
   // que a linha de comando já diz.
   fs.writeFileSync(
     caminho,
-    ['# Vazio de propósito — ver configNeutro() em scripts/tunel.mjs.', 'no-autoupdate: true', ''].join(
-      '\n'
-    )
+    [
+      '# Vazio de propósito — ver configNeutro() em scripts/tunel.mjs.',
+      'no-autoupdate: true',
+      '',
+    ].join('\n'),
   );
   return caminho;
 }
 
-function anunciar(url, escreveu, temDiscord, temPainel) {
+function anunciar(url, escreveu, clientId, temPainel) {
   const dominio = url.replace('https://', '');
   console.log(`\n${cor.verde}${cor.forte}  Endereço do túnel: ${url}${cor.fim}`);
   console.log(
     escreveu
       ? `${cor.fraco}  Já guardei no .env — não precisa copiar.${cor.fim}\n`
-      : `${cor.fraco}  Modo de teste: não mexi no .env, vale só nesta execução.${cor.fim}\n`
+      : `${cor.fraco}  Modo de teste: não mexi no .env, vale só nesta execução.${cor.fim}\n`,
   );
 
   // Sem credencial do Discord o programa é só um site: falar de URL Mappings
   // ali seria instrução para um lugar onde a pessoa não tem o que fazer.
-  if (!temDiscord) {
-    console.log(`${cor.fraco}  Abra esse endereço no navegador para usar de qualquer lugar.${cor.fim}\n`);
+  if (!clientId) {
+    console.log(
+      `${cor.fraco}  Abra esse endereço no navegador para usar de qualquer lugar.${cor.fim}\n`,
+    );
     return;
   }
 
-  console.log('  No portal do Discord, em Activities → URL Mappings, o "Target" é:');
+  // O link leva direto à aplicação certa, que é o que ninguém consegue montar
+  // de cabeça. As telas de dentro ficam por escrito: o portal não expõe caminho
+  // estável para elas, e um link adivinhado que caia em 404 seria pior do que
+  // "Activities → URL Mappings", que continua valendo quando eles mexerem na
+  // navegação.
+  console.log('  Abra a sua aplicação no portal do Discord:');
+  console.log(
+    `\n      ${cor.verde}https://discord.com/developers/applications/${clientId}${cor.fim}\n`,
+  );
+
+  console.log('  Lá, em Activities → URL Mappings, o "Target" é:');
   console.log(`\n      ${cor.verde}${dominio}${cor.fim}\n`);
   console.log('  E em OAuth2 → Redirects:');
   console.log(`\n      ${cor.verde}${url}/auth/callback${cor.fim}\n`);
   console.log(`${cor.fraco}  (esse endereço muda toda vez que este comando reinicia)${cor.fim}\n`);
 
-  // Depois das instruções do portal, porque aquelas são obrigatórias e esta é
-  // um extra. Mas precisa estar aqui: com túnel descartável o endereço do
-  // painel muda a cada reinício, e montá-lo de cabeça toda vez é o tipo de
-  // atrito que faz não se olhar o painel nunca.
-  //
-  // Só com credencial do Discord: o login do painel é OAuth, e sem Client ID
-  // ele levaria a uma página de erro do próprio Discord.
+  // O link de instalação fica por último porque é o único que não muda — e é
+  // também o passo que mais some de vista. Sem a aplicação instalada em algum
+  // servidor, o comando de entry point existe, o Target está certo, e a
+  // atividade continua fora do seletor sem nada explicando por quê.
+  console.log('  E, se ainda não instalou a aplicação num servidor — uma vez só:');
+  console.log(
+    `\n      ${cor.verde}https://discord.com/oauth2/authorize?client_id=${clientId}${cor.fim}\n`,
+  );
+
+  // O painel só existe para quem o ligou, e o endereço dele muda junto com o do
+  // túnel descartável — montá-lo de cabeça a cada reinício é o tipo de atrito
+  // que faz não se olhar o painel nunca.
   if (temPainel) {
     console.log('  E o painel administrativo fica em:');
     console.log(`\n      ${cor.verde}${url}/admin${cor.fim}\n`);
@@ -224,14 +252,18 @@ if (path.resolve(fileURLToPath(import.meta.url)) === path.resolve(process.argv[1
   tunel.stderr.on('data', (p) => process.stderr.write(p));
 
   tunel.on('error', (err) => {
-    console.log(`\n${cor.vermelho}  Não consegui executar o cloudflared: ${err.message}${cor.fim}\n`);
+    console.log(
+      `\n${cor.vermelho}  Não consegui executar o cloudflared: ${err.message}${cor.fim}\n`,
+    );
     process.exit(1);
   });
 
   tunel.on('close', (codigo) => {
     if (!tunel.fixo) {
       console.log(`\n${cor.vermelho}  O túnel fechou (código ${codigo}).${cor.fim}`);
-      console.log(`${cor.fraco}  Verifique sua conexão e rode "npm run tunel" de novo.${cor.fim}\n`);
+      console.log(
+        `${cor.fraco}  Verifique sua conexão e rode "npm run tunel" de novo.${cor.fim}\n`,
+      );
     }
     process.exit(codigo ?? 0);
   });
