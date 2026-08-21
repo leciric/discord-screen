@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+#
+# Hook de deploy do VPS. Mora em /opt/discord-screen.git/hooks/post-receive.
+#
+# É o que faz `git push deploy main` virar site no ar: recebe os objetos,
+# escreve a árvore de trabalho em /opt/discord-screen, instala, monta o site e
+# recarrega o pm2.
+#
+# Esta cópia versionada existe para que o hook não seja um arquivo solto que só
+# vive no servidor — quando ele muda, muda aqui e vai para lá pelo
+# infra/instalar-hook.sh.
+set -euo pipefail
+
+TARGET=/opt/discord-screen
+BARE=/opt/discord-screen.git
+BRANCH=main
+
+# O pm2 e o node estão em /usr/local/bin, e o hook roda com o PATH curto do
+# git-receive-pack — sem isto o deploy morre em "pm2: command not found".
+export PATH=/usr/local/bin:$PATH
+
+while read -r oldrev newrev ref; do
+  [ "$ref" = "refs/heads/$BRANCH" ] || continue
+
+  echo "==> deploying $BRANCH -> $TARGET"
+
+  # O git-receive-pack exporta estas variáveis apontando para o repositório
+  # bare. Sem limpá-las, todo comando git daqui para baixo — inclusive os que
+  # rodam dentro do npm — acha que está no bare, e o checkout vai para o lugar
+  # errado.
+  unset GIT_DIR GIT_WORK_TREE GIT_QUARANTINE_PATH GIT_INDEX_FILE
+
+  git --git-dir="$BARE" --work-tree="$TARGET" checkout -f "$BRANCH"
+  cd "$TARGET"
+  mkdir -p logs
+
+  # npm ci, e não npm install: respeita o package-lock.json. Em servidor isso
+  # importa, porque o install pode subir uma versão menor sem ninguém pedir.
+  #
+  # --omit=dev tira o vitest e o eslint, que não têm o que fazer aqui. O vite
+  # continua vindo: ele é dependência normal do workspace client, não de
+  # desenvolvimento — - e sem ele o passo seguinte não teria com o que montar o
+  # site.
+  echo "==> npm ci"
+  npm ci --omit=dev --no-audit --no-fund
+
+  # O servidor serve client/dist/. Sem este passo o deploy sobe com o site da
+  # versão anterior, e a falha aparece só no navegador de quem abrir.
+  echo "==> build"
+  npm run build
+
+  echo "==> pm2 startOrReload"
+  pm2 startOrReload ecosystem.config.cjs --update-env
+  pm2 save --force
+
+  echo "==> deployed $(git --git-dir="$BARE" rev-parse --short "$BRANCH")"
+done
