@@ -43,6 +43,15 @@ export default defineConfig([
     languageOptions: { globals: { ...globals.browser, ...globals.worker } },
   },
 
+  // O `.cjs` é o único CommonJS que sobrou, e existe por imposição de fora: o
+  // pm2 lê a configuração dele com `require`, e num pacote `"type": "module"`
+  // a extensão é a única forma de dizer isso. Sem esta entrada o `no-undef`
+  // acusa o `module` — que ali é justamente o certo.
+  {
+    files: ['**/*.cjs'],
+    languageOptions: { sourceType: 'commonjs', globals: globals.node },
+  },
+
   // Por último: desliga o que o Prettier já decide. Duas ferramentas opinando
   // sobre a mesma vírgula é conflito, não verificação dobrada.
   prettier,
