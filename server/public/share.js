@@ -21,6 +21,8 @@ import {
 } from '/shared/broadcaster.js?v=8';
 import { criarCamada, conter } from '/shared/anotacoes.js?v=3';
 import { criarFlutuante, flutuarDisponivel } from '/shared/flutuar.js?v=1';
+import { criarEstudio } from '/shared/estudio.js?v=1';
+import { carregarAnimacao } from '/shared/animacao.js?v=1';
 
 const $ = (id) => document.getElementById(id);
 
@@ -182,7 +184,7 @@ function atenderPedido(fonte, novas) {
   if (!painel || painel.ativo() || painel.indisponivel()) return;
 
   chamar(fonte);
-  if (fonte === 'camera') painel.verCamera();
+  if (fonte === 'camera') painel.abrirPrevia();
 }
 
 // --------------------------------------------------------------- controle
@@ -259,15 +261,40 @@ function criarPainel(fonte) {
   // Qual câmera. `null` é o que o navegador escolher.
   let dispositivo = null;
 
+  /**
+   * O estúdio, só no painel da câmera.
+   *
+   * A tela vai crua para o encoder: ninguém quer um recorte oval sobre uma
+   * planilha, e passar 1080p de texto por um canvas a mais custaria uma cópia
+   * inteira por quadro sem nada em troca. A câmera é a única fonte em que
+   * trocar o fundo — ou trocar a própria câmera por um GIF — faz sentido.
+   */
+  let estudio = null;
+  // A câmera de verdade, antes do estúdio. Guardada à parte porque é ela que
+  // segura o hardware e é ela que precisa ser solta.
+  let cameraCrua = null;
+  // As animações são de quem as carregou: o estúdio só as desenha. Ver a nota
+  // em shared/estudio.js.
+  let animacaoEntrada = null;
+  let animacaoFundo = null;
+
   function pararPrevia() {
-    previa?.getTracks().forEach((t) => t.stop());
+    // A prévia da câmera É a faixa do estúdio, e o estúdio sobrevive à prévia:
+    // pará-la aqui mataria o canvas que a transmissão está prestes a usar.
+    if (previa && previa !== estudio?.stream) previa.getTracks().forEach((t) => t.stop());
     previa = null;
     el('previa').srcObject = null;
     el('previa').hidden = true;
     el('vazio').hidden = false;
   }
 
-  function mostrarPrevia(stream) {
+  /**
+   * @param {MediaStream} stream          o que aparece na prévia
+   * @param {MediaStreamTrack|null} vigiada  a faixa cujo fim significa que a
+   *   fonte acabou. Pela câmera é a faixa do dispositivo, e não a do canvas —
+   *   o canvas continua desenhando um quadro parado depois da webcam sumir.
+   */
+  function mostrarPrevia(stream, vigiada = stream.getVideoTracks()[0]) {
     previa = stream;
     el('previa').srcObject = stream;
     el('previa')
@@ -278,12 +305,33 @@ function criarPainel(fonte) {
 
     // A fonte pode acabar sozinha — webcam desconectada, janela fechada. Sem
     // isto o último quadro fica congelado e a prévia passa a mentir.
-    stream.getVideoTracks()[0]?.addEventListener('ended', () => {
-      if (previa === stream) {
-        pararPrevia();
-        setStatus(camera ? 'A câmera foi desligada.' : 'O compartilhamento acabou.');
-      }
+    vigiada?.addEventListener('ended', () => {
+      if (previa !== stream) return;
+      pararPrevia();
+      pararEstudio();
+      setStatus(camera ? 'A câmera foi desligada.' : 'O compartilhamento acabou.');
     });
+  }
+
+  /** O estúdio nasce na primeira vez que alguém precisa dele. */
+  function montarEstudio() {
+    if (!estudio) estudio = criarEstudio({ fps: opcoes.fps });
+    return estudio;
+  }
+
+  function soltarCamera() {
+    cameraCrua?.getTracks().forEach((t) => t.stop());
+    cameraCrua = null;
+  }
+
+  function pararEstudio() {
+    estudio?.parar();
+    estudio = null;
+    soltarCamera();
+    animacaoEntrada?.parar();
+    animacaoEntrada = null;
+    animacaoFundo?.parar();
+    animacaoFundo = null;
   }
 
   function setStatus(msg, kind = '') {
@@ -433,7 +481,13 @@ function criarPainel(fonte) {
 
   // ------------------------------------------------------ escolher a fonte
 
-  /** Abre a prévia da câmera, trocando a que estiver aberta. */
+  /**
+   * Abre a prévia da câmera, trocando a que estiver aberta.
+   *
+   * O que vai para a tela — e, depois, para o ar — é a saída do estúdio, não a
+   * câmera crua: é isso que faz o fundo escolhido valer já na prévia. Ver a
+   * webcam sem efeito aqui e com efeito no ar seria conferir a coisa errada.
+   */
   async function verCamera(id = dispositivo) {
     setStatus('Abrindo a câmera…');
     try {
@@ -444,8 +498,14 @@ function criarPainel(fonte) {
       // Sem escolha explícita, adota a que o navegador deu: assim o tique do
       // menu marca a que está no ar em vez de não marcar nenhuma.
       dispositivo = id ?? s.getVideoTracks()[0]?.getSettings().deviceId ?? null;
+
+      soltarCamera();
+      cameraCrua = s;
+      montarEstudio().usarCamera(s);
+      await aplicarFundo();
+
       pararPrevia();
-      mostrarPrevia(s);
+      mostrarPrevia(estudio.stream, s.getVideoTracks()[0]);
       setStatus('Prévia — ainda não está no ar.');
       await listarCameras();
     } catch (err) {
@@ -455,6 +515,92 @@ function criarPainel(fonte) {
           : err.message,
         'error',
       );
+    }
+  }
+
+  /**
+   * Um GIF no lugar da câmera.
+   *
+   * A webcam é solta de propósito: quem escolheu mostrar um GIF não quer a luz
+   * da câmera acesa nem o dispositivo preso por esta aba enquanto isso.
+   */
+  async function verGif(arquivo) {
+    if (!arquivo) {
+      setStatus('Escolha um GIF ou uma imagem para mostrar.', 'aviso');
+      return;
+    }
+
+    setStatus('Abrindo o arquivo…');
+    try {
+      const nova = await carregarAnimacao(arquivo);
+      animacaoEntrada?.parar();
+      animacaoEntrada = nova;
+
+      soltarCamera();
+      montarEstudio().usarAnimacao(nova);
+      // Sem recorte: aqui a imagem inteira É o que se quer mostrar, e cobrir a
+      // borda dela com um "fundo" seria esconder o próprio conteúdo.
+      estudio.definirFundo({ tipo: 'nenhum' });
+
+      pararPrevia();
+      // Sem faixa vigiada: um canvas não acaba sozinho, e a animação também não.
+      mostrarPrevia(estudio.stream, null);
+      setStatus(
+        nova.animada
+          ? 'GIF pronto — ainda não está no ar.'
+          : 'Imagem pronta — ainda não está no ar.',
+      );
+    } catch (err) {
+      setStatus(`Não deu para abrir esse arquivo: ${err.message}`, 'error');
+    }
+  }
+
+  // ------------------------------------------------------------------ fundo
+
+  /**
+   * O sistema sabe separar pessoa de parede?
+   *
+   * Onde `backgroundBlur` existe como constraint, quem desfoca é a própria
+   * pilha de captura do sistema operacional, com segmentação de verdade. É
+   * incomparavelmente melhor que o recorte geométrico daqui, então quando
+   * existe é ele que vale — e o recorte sai de cena inteiro.
+   */
+  const temDesfoqueNativo = () =>
+    Boolean(navigator.mediaDevices.getSupportedConstraints?.().backgroundBlur);
+
+  async function pedirDesfoqueNativo(ligado) {
+    const faixa = cameraCrua?.getVideoTracks()[0];
+    if (!faixa || !temDesfoqueNativo()) return false;
+    try {
+      await faixa.applyConstraints({ backgroundBlur: ligado });
+      return ligado;
+    } catch {
+      // Câmera que não faz: cai no recorte, como em qualquer outro sistema.
+      return false;
+    }
+  }
+
+  /** Lê os controles e manda o estúdio obedecer. */
+  async function aplicarFundo() {
+    if (!estudio) return;
+
+    // Com um GIF no lugar da câmera não há fundo a esconder: o quadro inteiro
+    // já é escolha de quem transmite.
+    const tipo = entradaEscolhida() === 'gif' ? 'nenhum' : $('camera-fundo').value;
+    const janela = Number($('camera-janela').value) / 100;
+
+    const nativo = await pedirDesfoqueNativo(tipo === 'desfoque');
+
+    if (tipo === 'nenhum' || nativo) {
+      estudio.definirFundo({ tipo: 'nenhum' });
+    } else if (tipo === 'cor') {
+      estudio.definirFundo({ tipo: 'cor', cor: $('camera-cor').value, janela });
+    } else if (tipo === 'midia' && animacaoFundo) {
+      estudio.definirFundo({ tipo: 'midia', animacao: animacaoFundo, janela });
+    } else {
+      // Sobra o desfoque — e é onde cai também um fundo de mídia sem arquivo
+      // escolhido ainda, que é melhor do que um retângulo preto sem explicação.
+      estudio.definirFundo({ tipo: 'desfoque', janela });
     }
   }
 
@@ -543,6 +689,19 @@ function criarPainel(fonte) {
     // servidor, e o seletor de tela abriria por cima do que já está no ar.
     if (broadcaster) return;
 
+    // A câmera nunca vai crua para o encoder: quem transmite escolheu um fundo
+    // (ou um GIF), e quem entrega isso é o estúdio. Sem prévia montada não há
+    // estúdio, então ele é montado agora — `getUserMedia` não exige gesto do
+    // usuário depois da permissão dada, e o arquivo já está escolhido.
+    if (camera && !previa) {
+      await (entradaEscolhida() === 'gif' ? verGif(arquivoEntrada()) : verCamera());
+      // Deu errado: o status já disse o quê, e ir ao ar sem imagem seria pior.
+      if (!previa) {
+        el('start').disabled = false;
+        return;
+      }
+    }
+
     el('start').disabled = true;
     setStatus(camera ? 'Aguardando a permissão da câmera…' : 'Aguardando você escolher a tela…');
 
@@ -577,6 +736,10 @@ function criarPainel(fonte) {
       onEnd: (reason) => {
         broadcaster = null;
         limparMarcacoes();
+        // O broadcaster para as faixas do que recebeu, e o que ele recebeu foi
+        // a saída do estúdio: com a faixa morta, o estúdio não tem mais por
+        // onde entregar. O próximo "ligar" monta outro.
+        pararEstudio();
         mostrarSetup();
         setStatus(reason);
       },
@@ -614,6 +777,101 @@ function criarPainel(fonte) {
     }
   }
 
+  // ------------------------------------------------- controles da câmera
+
+  const entradaEscolhida = () => (camera ? $('camera-entrada').value : 'camera');
+  const arquivoEntrada = () => $('camera-gif').files?.[0] ?? null;
+
+  /**
+   * Mostra só os campos que a escolha atual usa.
+   *
+   * Um seletor de cor visível enquanto o fundo é "desfocar" é um controle que
+   * não faz nada — e um controle que não faz nada é lido como quebrado.
+   */
+  function espelharControles() {
+    if (!camera) return;
+
+    const entrada = entradaEscolhida();
+    const gif = entrada === 'gif';
+    const tipo = $('camera-fundo').value;
+
+    $('camera-gif-campo').hidden = !gif;
+    // Com um GIF no lugar da câmera não existe fundo separado do resto.
+    $('camera-fundo-campo').hidden = gif;
+    $('camera-cor-campo').hidden = gif || tipo !== 'cor';
+    $('camera-fundo-arquivo-campo').hidden = gif || tipo !== 'midia';
+
+    // O recorte só existe onde ele é o mecanismo. Com o desfoque do sistema no
+    // ar não há recorte nenhum para dimensionar.
+    const recortando = !gif && tipo !== 'nenhum' && !(tipo === 'desfoque' && temDesfoqueNativo());
+    $('camera-janela-campo').hidden = !recortando;
+
+    el('start').textContent = gif ? 'Mostrar este GIF' : 'Ligar a câmera';
+    // A seta escolhe entre câmeras; com um GIF no ar não há o que escolher.
+    el('escolher').hidden = gif;
+
+    const nota = $('camera-fundo-nota');
+    nota.textContent = textoDoFundo(gif, tipo);
+    nota.hidden = !nota.textContent;
+  }
+
+  function textoDoFundo(gif, tipo) {
+    if (gif) return 'O GIF vai no lugar da câmera, e aparece para os outros como se fosse ela.';
+    if (tipo === 'nenhum') return '';
+    if (tipo === 'desfoque' && temDesfoqueNativo()) {
+      return 'Desfoque do próprio sistema: ele separa você do fundo de verdade.';
+    }
+    // Prometer segmentação que não existe seria descobrir a verdade ao vivo.
+    return 'Aparece o miolo do quadro; o resto vira o fundo escolhido. Centralize-se e ajuste o tamanho do recorte.';
+  }
+
+  if (camera) {
+    espelharControles();
+
+    $('camera-entrada').addEventListener('change', () => {
+      espelharControles();
+      // Nada no ar ainda e nada escolhido: só espera o arquivo ou o clique.
+      if (entradaEscolhida() === 'gif') {
+        if (arquivoEntrada()) verGif(arquivoEntrada());
+        return;
+      }
+      // Voltar para a câmera de verdade só faz sentido se já havia imagem: sem
+      // isso, seria acender a webcam por causa de um clique num seletor.
+      if (previa || broadcaster) verCamera();
+    });
+
+    $('camera-gif').addEventListener('change', () => {
+      const arquivo = arquivoEntrada();
+      if (!arquivo) return;
+      $('camera-entrada').value = 'gif';
+      espelharControles();
+      verGif(arquivo);
+    });
+
+    $('camera-fundo').addEventListener('change', () => {
+      espelharControles();
+      aplicarFundo();
+    });
+
+    $('camera-cor').addEventListener('input', aplicarFundo);
+    $('camera-janela').addEventListener('input', aplicarFundo);
+
+    $('camera-fundo-arquivo').addEventListener('change', async () => {
+      const arquivo = $('camera-fundo-arquivo').files?.[0];
+      if (!arquivo) return;
+      try {
+        const nova = await carregarAnimacao(arquivo);
+        animacaoFundo?.parar();
+        animacaoFundo = nova;
+        $('camera-fundo').value = 'midia';
+        espelharControles();
+        await aplicarFundo();
+      } catch (err) {
+        setStatus(`Não deu para abrir esse fundo: ${err.message}`, 'error');
+      }
+    });
+  }
+
   // O que impede esta fonte, sem derrubar a outra: um celular não tem
   // `getDisplayMedia` e tem `getUserMedia`, então a tela cai e a câmera fica.
   const indisponivel = fonteIndisponivel(fonte);
@@ -647,15 +905,31 @@ function criarPainel(fonte) {
     ligar,
     escolher,
     verCamera,
+    verGif,
+    /**
+     * A prévia da câmera, seja ela qual for.
+     *
+     * A atividade pede "a câmera" e não sabe — nem precisa saber — que do lado
+     * de cá isso pode ser um GIF. A escolha mora nesta página, então é ela que
+     * decide o que abrir.
+     */
+    abrirPrevia: () => (entradaEscolhida() === 'gif' ? verGif(arquivoEntrada()) : verCamera()),
     setStatus,
     indisponivel: () => Boolean(indisponivel),
-    aplicarQualidade: () => broadcaster?.setQuality({ bitrate: opcoes.bitrate, fps: opcoes.fps }),
+    aplicarQualidade: () => {
+      // O canvas do estúdio só entrega quadro quando o relógio dele pede, então
+      // a taxa nova precisa chegar aos dois: sem isto, subir para 60 fps não
+      // teria de onde tirar os quadros a mais.
+      estudio?.definirFps(opcoes.fps);
+      broadcaster?.setQuality({ bitrate: opcoes.bitrate, fps: opcoes.fps });
+    },
     ativo: () => Boolean(broadcaster),
     // Fechar a aba tem que soltar a câmera, esteja ela no ar ou só na prévia.
     parar: () => {
       broadcaster?.stop();
       flutuante?.parar();
       pararPrevia();
+      pararEstudio();
     },
     trocarSom: () => broadcaster?.trocarSom(),
   };

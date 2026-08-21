@@ -19,6 +19,10 @@
         <div class="icon">🖥️</div>
         <h1 id="emptyTitle">Conectando…</h1>
         <p id="emptyText" class="muted">Entrando na sala</p>
+        <!-- Só aparece quando o arranque falha ou demora. Dentro do Discord
+             recarregar a página é a saída que não existe — o iframe volta
+             branco —, então a única forma de tentar de novo é esta. -->
+        <button id="emptyRetry" class="btn go" hidden>Tentar de novo</button>
       </div>
 
       <!-- Lobby: escolher ou criar sala antes de entrar -->

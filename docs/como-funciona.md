@@ -58,6 +58,18 @@ explicitamente. É o que segura a banda: filtrar só na exibição gastaria a me
 saída de rede. Por isso cada tela aparece primeiro como um convite
 ("Assistir tela") em vez de já começar a tocar.
 
+Com uma exceção, e ela é sobre a diferença entre economia e atrito: quando há
+**uma única** transmissão de outra pessoa na sala, o cliente pede sozinho. A
+escolha precisa ter mais de uma opção para ser escolha — com uma tela só no ar,
+o convite é um clique cobrado para chegar ao único lugar aonde dava para ir, e
+quem entrou numa sala com uma tela no ar entrou para vê-la.
+
+A partir da segunda o convite volta, porque aí a pergunta existe: baixar as duas
+custa o dobro. Fechar uma tela de propósito também a mantém fechada — sem essa
+marca, o botão de parar de assistir reabriria o que acabou de fechar no render
+seguinte. A própria transmissão nunca abre sozinha: ela já é mostrada pela
+prévia local, sem passar pela rede.
+
 ## Salas
 
 - **No Discord:** não há lista. A atividade entra direto na sala daquela call.
@@ -226,6 +238,8 @@ client/
 shared/
   broadcaster.js  captura + codificação, usada pela aba e pela atividade
   rtc.js          conexão direta por WebRTC, por cima do relay
+  estudio.js      a câmera antes do encoder: fundo trocado, ou um GIF no lugar
+  animacao.js     GIF decodificado quadro a quadro, com relógio próprio
   anotacoes.js    estado e desenho do laser e da caneta
   flutuar.js      a janela por cima de tudo (composição + Picture-in-Picture)
   porta.js        a porta padrão, num lugar só
@@ -234,6 +248,39 @@ scripts/
   tunel.mjs       sobe o túnel e grava o endereço no .env
   smoke.mjs       teste do servidor ponta a ponta, sem navegador
 ```
+
+## A câmera virtual
+
+Entre a webcam e o encoder existe um canvas. Ele resolve duas coisas que são a
+mesma coisa por dentro: trocar o fundo, e trocar a câmera inteira por um GIF —
+nos dois casos o que sai é uma faixa de vídeo, e o resto do programa não
+distingue uma da outra.
+
+Três decisões que não são acidentais:
+
+**`captureStream(0)`, e não `captureStream(fps)`.** Com zero, o único jeito de
+sair um quadro é pedindo (`requestFrame`). É isso que permite trocar a taxa com
+a transmissão no ar sem refazer a faixa, e garante que todo quadro entregue
+acabou de ser desenhado.
+
+**O relógio mora num Worker.** `requestAnimationFrame` congela em aba escondida
+e `setInterval` na página é afunilado para um disparo por segundo. Os dois são
+fatais aqui: a aba de captura existe justamente para ficar em segundo plano
+enquanto a pessoa volta para o Discord. Dentro de um Worker o afunilamento não
+se aplica. É o mesmo motivo pelo qual o GIF é decodificado pelo `ImageDecoder`,
+com índice de quadro nosso, em vez de por um `<img>` que anima sozinho — um
+`<img>` em aba escondida não é pintado, e o que não é pintado não avança.
+
+**O estúdio não é dono de nada que recebe.** Nem do MediaStream da câmera nem
+da animação: um GIF pode ser a entrada agora e o fundo daqui a pouco, e fechar
+o que se recebe apagaria imagem que quem chamou ainda está usando.
+
+Sobre o fundo, sem prometer o que não se cumpre: separar pessoa de parede exige
+um modelo de segmentação. Onde o sistema oferece isso pronto — a constraint
+`backgroundBlur` —, é ela que vale. Onde não oferece, o que existe é um recorte
+oval no meio do quadro, montado num canvas à parte e colado inteiro com
+`destination-in`: um `clip()` cortaria na unha, e a emenda dura entre rosto e
+fundo é o que denuncia o truque. A interface diz qual dos dois está no ar.
 
 ## Testes
 

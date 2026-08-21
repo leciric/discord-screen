@@ -113,6 +113,17 @@ const configurado = Boolean(atual.DISCORD_CLIENT_ID && atual.DISCORD_CLIENT_SECR
  */
 const interativo = Boolean(stdin.isTTY);
 
+/**
+ * `--direto` pula o menu e sobe.
+ *
+ * O menu existe para quem chega pela primeira vez e não sabe o que está
+ * configurado. Quem já sabe roda isto vinte vezes por dia, e a pergunta
+ * "Escolha (1 ou 2)" com uma resposta só possível vira uma tecla a mais entre
+ * a vontade de ver a mudança e a mudança na tela. A configuração continua
+ * sendo pedida quando falta: pular o menu não é pular o que é obrigatório.
+ */
+const direto = process.argv.includes('--direto');
+
 if (!configurado && !interativo) {
   linha();
   erro('Faltam as credenciais do Discord, e não há terminal para perguntar.');
@@ -126,6 +137,8 @@ if (!configurado) {
   nota('  Primeira vez por aqui — vamos configurar o Discord.');
   nota('  (Ctrl+C a qualquer momento; nada se perde.)');
   await configurar(atual);
+} else if (direto) {
+  nota(`  Aplicação ${atual.DISCORD_CLIENT_ID} — subindo direto.`);
 } else if (!interativo) {
   nota(`  Aplicação ${atual.DISCORD_CLIENT_ID} — subindo direto (sem terminal para o menu).`);
 } else {

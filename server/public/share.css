@@ -86,6 +86,43 @@ select {
   max-width: none;
 }
 
+/* A fileira dos arquivos e da cor. Some inteira quando nenhum campo dela está
+   em uso — um `gap` sobrando entre dois blocos vira um buraco sem explicação. */
+.ajustes-arquivo:not(:has(label:not([hidden]))) {
+  display: none;
+}
+
+.ajustes input[type='file'] {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.ajustes input[type='file']::file-selector-button {
+  font: inherit;
+  margin-right: 10px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.ajustes input[type='color'] {
+  width: 100%;
+  height: 34px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.ajustes input[type='range'] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
 .check {
   display: flex;
   gap: 10px;

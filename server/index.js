@@ -35,6 +35,17 @@ const {
 const PUBLIC_ORIGIN = ORIGEM_CRUA.replace(/[/]+$/, '');
 
 const isProd = NODE_ENV === 'production';
+
+/**
+ * Quanto se espera pelo Discord antes de desistir.
+ *
+ * Abaixo dos 15s que o cliente espera por nós, de propósito: quem estoura
+ * primeiro precisa ser o lado que sabe o motivo. Estourando aqui, a resposta
+ * diz "o Discord não respondeu"; estourando lá, tudo o que sobra na tela é o
+ * palpite de que o servidor está fora do ar.
+ */
+const PRAZO_DISCORD_MS = 8000;
+
 // Mais de uma pessoa administra: separe os IDs por virgula. Um Set porque a
 // unica pergunta feita aqui e "este ID esta na lista".
 const ADMIN_IDS = new Set(
@@ -176,6 +187,19 @@ app.use(
 // ------------------------------------------------------------------ OAuth
 
 /** Troca o code do OAuth pelo access_token. O secret nunca sai do servidor. */
+/**
+ * O que dizer quando a conversa com o Discord não terminou.
+ *
+ * "erro interno" mandava procurar o problema aqui dentro, e a causa quase
+ * sempre é a rede entre este servidor e o Discord — que se resolve tentando de
+ * novo. O texto vai para a tela de quem está entrando, então precisa dizer isso.
+ */
+function motivoDoDiscord(err) {
+  return err?.name === 'TimeoutError' || err?.name === 'AbortError'
+    ? 'O Discord não respondeu a tempo. Tente de novo.'
+    : 'Não foi possível falar com o Discord agora. Tente de novo.';
+}
+
 app.post('/api/token', async (req, res) => {
   const { code, client_id } = req.body ?? {};
   if (!code) return res.status(400).json({ error: 'code obrigatorio' });
@@ -213,6 +237,11 @@ app.post('/api/token', async (req, res) => {
         grant_type: 'authorization_code',
         code,
       }),
+      // fetch não expira sozinho, e do outro lado está a rede do Discord. Sem
+      // prazo, um pedido pendurado aqui vira uma atividade parada em
+      // "Conectando…" — o cliente desiste antes, e o único sinal que sobra é o
+      // painel dizendo que o servidor não respondeu.
+      signal: AbortSignal.timeout(PRAZO_DISCORD_MS),
     });
 
     const data = await r.json();
@@ -227,7 +256,7 @@ app.post('/api/token', async (req, res) => {
     res.json({ access_token: data.access_token });
   } catch (err) {
     console.error('[oauth] erro:', err);
-    res.status(500).json({ error: 'erro interno' });
+    res.status(502).json({ error: motivoDoDiscord(err) });
   }
 });
 
@@ -247,6 +276,7 @@ app.post('/api/session', async (req, res) => {
   try {
     const me = await fetch('https://discord.com/api/users/@me', {
       headers: { Authorization: `Bearer ${access_token}` },
+      signal: AbortSignal.timeout(PRAZO_DISCORD_MS),
     }).then((r) => r.json());
 
     if (!me?.id) return res.status(401).json({ error: 'token invalido' });
@@ -313,7 +343,7 @@ app.post('/api/session', async (req, res) => {
     });
   } catch (err) {
     console.error('[session] erro:', err);
-    res.status(500).json({ error: 'erro interno' });
+    res.status(502).json({ error: motivoDoDiscord(err) });
   }
 });
 
@@ -408,6 +438,7 @@ async function inVoiceChannel(guildId, channelId, userId) {
   try {
     const r = await fetch(`https://discord.com/api/v10/guilds/${guildId}/voice-states/${userId}`, {
       headers: { Authorization: `Bot ${DISCORD_BOT_TOKEN}` },
+      signal: AbortSignal.timeout(PRAZO_DISCORD_MS),
     });
 
     if (r.status === 404) {
@@ -717,6 +748,7 @@ app.get('/auth/callback', async (req, res) => {
         redirect_uri: REDIRECT_URI,
         code: String(code),
       }),
+      signal: AbortSignal.timeout(PRAZO_DISCORD_MS),
     }).then((r) => r.json());
 
     if (!token.access_token) {
@@ -725,6 +757,7 @@ app.get('/auth/callback', async (req, res) => {
 
     const me = await fetch('https://discord.com/api/users/@me', {
       headers: { Authorization: `Bearer ${token.access_token}` },
+      signal: AbortSignal.timeout(PRAZO_DISCORD_MS),
     }).then((r) => r.json());
 
     if (!me?.id) {

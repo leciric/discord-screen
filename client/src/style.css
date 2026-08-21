@@ -862,6 +862,13 @@ body {
   font-size: 19px;
 }
 
+/* O botão é filho do mesmo grid centrado, então basta afastá-lo do texto. */
+#emptyRetry {
+  margin-top: 14px;
+  width: auto;
+  padding: 0 16px;
+}
+
 .muted {
   color: var(--muted);
   font-size: 14px;

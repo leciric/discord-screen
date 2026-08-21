@@ -8,7 +8,7 @@
          dos cabeçalhos no-store guardou a versão antiga por heurística do
          navegador, e continuaria usando ela para sempre. Trocar a query força
          uma URL nova. Incremente ao publicar mudanças nesses arquivos. -->
-    <link rel="stylesheet" href="/share.css?v=25" />
+    <link rel="stylesheet" href="/share.css?v=26" />
   </head>
   <body>
     <main class="card">
@@ -107,6 +107,63 @@
         <section class="bloco" id="bloco-camera">
           <h2>Câmera</h2>
 
+          <!-- Fora do setup e do live, como os ajustes da tela: dá para
+               escolher antes de ligar e para trocar com a câmera no ar, sem
+               derrubar quem está assistindo. -->
+          <div class="ajustes">
+            <label>
+              Imagem
+              <select id="camera-entrada">
+                <option value="camera">Câmera</option>
+                <option value="gif">GIF ou imagem</option>
+              </select>
+            </label>
+            <label id="camera-fundo-campo">
+              Fundo
+              <select id="camera-fundo">
+                <option value="nenhum">Como está</option>
+                <option value="desfoque">Desfocar</option>
+                <option value="cor">Cor sólida</option>
+                <option value="midia">Imagem ou GIF</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="ajustes ajustes-arquivo">
+            <label id="camera-gif-campo" hidden>
+              O que mostrar no lugar da câmera
+              <input
+                id="camera-gif"
+                type="file"
+                accept="image/gif,image/webp,image/png,image/apng,image/jpeg,image/avif"
+              />
+            </label>
+
+            <label id="camera-cor-campo" hidden>
+              Cor do fundo
+              <input id="camera-cor" type="color" value="#101318" />
+            </label>
+
+            <label id="camera-fundo-arquivo-campo" hidden>
+              Imagem ou GIF de fundo
+              <input
+                id="camera-fundo-arquivo"
+                type="file"
+                accept="image/gif,image/webp,image/png,image/apng,image/jpeg,image/avif"
+              />
+            </label>
+
+            <label id="camera-janela-campo" hidden>
+              Tamanho do recorte
+              <input id="camera-janela" type="range" min="35" max="100" step="1" value="62" />
+            </label>
+          </div>
+
+          <!-- Dizer o que o recorte é, em vez de deixar a pessoa descobrir no
+               ar. O desfoque do sistema, quando existe, separa de verdade; o
+               nosso é geometria, e prometer o contrário seria mentir. -->
+          <p class="note" id="camera-fundo-nota" hidden></p>
+
           <div id="camera-setup">
             <div class="sem-preview" id="camera-vazio">Sem preview</div>
             <video id="camera-previa" muted playsinline hidden></video>
@@ -167,6 +224,6 @@
       </footer>
     </main>
 
-    <script type="module" src="/share.js?v=25"></script>
+    <script type="module" src="/share.js?v=26"></script>
   </body>
 </html>

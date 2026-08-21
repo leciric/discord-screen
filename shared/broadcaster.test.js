@@ -10,7 +10,13 @@
  * uma faixa de som que traria o Discord de volta em eco, e o que sai no fio.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createBroadcaster, fonteIndisponivel, supportError } from './broadcaster.js';
+import {
+  createBroadcaster,
+  fonteIndisponivel,
+  opcoesTela,
+  restricoesDeSom,
+  supportError,
+} from './broadcaster.js';
 
 // ------------------------------------------------------------------- dublês
 
@@ -360,6 +366,60 @@ describe('fonteIndisponivel', () => {
 
     expect(fonteIndisponivel('camera')).toMatch(/não permite acesso à câmera/);
     expect(fonteIndisponivel('tela')).toBeNull();
+  });
+});
+
+describe('o que se pede ao navegador', () => {
+  it('desliga os tratamentos de voz no som capturado', () => {
+    navigator.mediaDevices.getSupportedConstraints = () => ({});
+
+    // Eles existem para microfone. Em som de aplicativo, cortam justamente o
+    // que se queria ouvir.
+    expect(restricoesDeSom()).toEqual({
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+    });
+  });
+
+  it('pede para não capturar o próprio som onde dá', () => {
+    navigator.mediaDevices.getSupportedConstraints = () => ({ restrictOwnAudio: true });
+
+    // Sem isto, quem transmite enquanto assiste a outra tela devolve o som
+    // dela para a sala, em laço.
+    expect(restricoesDeSom().restrictOwnAudio).toBe(true);
+  });
+
+  it('sem som, nada de opção de som', () => {
+    const o = opcoesTela({ fps: 15 });
+
+    expect(o.audio).toBe(false);
+    expect(o.video).toEqual({ frameRate: { ideal: 15, max: 15 } });
+    // windowAudio/systemAudio sem áudio pedido seriam ignorados de qualquer
+    // jeito, e mandá-los sugeriria que a captura tem som.
+    expect(o.windowAudio).toBeUndefined();
+    expect(o.systemAudio).toBeUndefined();
+  });
+
+  it('com som, escopa à janela e recusa a mistura do sistema', () => {
+    navigator.mediaDevices.getSupportedConstraints = () => ({});
+    const o = opcoesTela({ comSom: true });
+
+    // É o que destrava transmitir um jogo com o som do jogo — e o que impede a
+    // tela inteira de trazer o Discord junto.
+    expect(o.windowAudio).toBe('window');
+    expect(o.systemAudio).toBe('exclude');
+    expect(o.audio.echoCancellation).toBe(false);
+  });
+
+  it('trinta quadros quando ninguém escolheu', () => {
+    expect(opcoesTela().video).toEqual({ frameRate: { ideal: 30, max: 30 } });
+  });
+
+  it('o vídeo pedido ganha da taxa', () => {
+    // O trocarSom pede `video: true` só para chegar ao seletor; a imagem
+    // daquela escolha é descartada.
+    expect(opcoesTela({ video: true, comSom: true }).video).toBe(true);
   });
 });
 

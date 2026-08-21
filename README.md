@@ -49,6 +49,10 @@ dentro da pasta do projeto. Você não instala nada à mão.
 
 Para desligar, aperte `Ctrl + C` na janela preta. Isso derruba tudo junto.
 
+Depois da primeira vez, quando já estiver tudo configurado, `npm run
+start:direto` faz o mesmo sem parar para perguntar nada: monta o site, sobe o
+túnel e liga o servidor.
+
 ### Só quero testar no navegador
 
 Se ele perguntar como você quer usar, escolha a opção **sem Discord**. Aí é só
@@ -239,6 +243,51 @@ volume, ou clica nele para silenciar.
 
 ---
 
+## Câmera: fundo e GIF
+
+A câmera tem botão próprio na barra de baixo, ao lado do de compartilhar tela.
+Ela abre na mesma aba de transmissão, e é lá que ficam os dois ajustes abaixo —
+os dois valem **na hora**, com a câmera já no ar, sem derrubar quem assiste.
+
+### Esconder o que está atrás de você
+
+No campo **Fundo**:
+
+- **Como está** — a câmera crua.
+- **Desfocar** — borra o que está atrás.
+- **Cor sólida** — cobre com a cor que você escolher.
+- **Imagem ou GIF** — cobre com um arquivo do seu computador.
+
+Duas coisas diferentes acontecem aqui, e vale saber qual você está usando.
+
+Alguns sistemas (Windows Studio Effects, macOS recente) sabem separar você da
+parede de verdade, e o navegador oferece isso como um botão. Onde esse recurso
+existe, **Desfocar** usa ele, e a página diz isso na notinha embaixo — é o
+resultado bom, igual ao do Zoom.
+
+Onde ele não existe — Linux e boa parte dos computadores —, não dá para separar
+pessoa de parede sem baixar um modelo de reconhecimento de vários megabytes, e
+este programa não baixa nada. O que ele faz é geometria: mostra um **oval no
+meio do quadro** e cobre todo o resto com o fundo escolhido. O cursor **Tamanho
+do recorte** ajusta esse oval. Funciona bem se você estiver centralizado, e a
+página avisa que é isso que está acontecendo, em vez de deixar você descobrir
+ao vivo.
+
+### Um GIF no lugar da câmera
+
+No campo **Imagem**, escolha **GIF ou imagem** e selecione um arquivo. Ele entra
+no lugar da webcam: para quem está na sala, aparece como a sua câmera, com o
+rótulo "Câmera" e tudo. A webcam nem chega a ser ligada — nada de luzinha acesa.
+
+Serve GIF, WebP animado, APNG, PNG e JPEG. O arquivo não sai do seu computador
+como arquivo: ele é desenhado quadro a quadro e vai pela transmissão como
+vídeo, igual à câmera.
+
+> A animação continua rodando com a aba de transmissão em segundo plano, que é
+> onde ela vai ficar enquanto você volta para o Discord.
+
+---
+
 ## Deu errado?
 
 **A atividade não abre, ou fica só um retângulo branco**
@@ -303,6 +352,7 @@ Aí nenhum túnel é necessário.
 |---|---|
 | `npm install` | Baixa o que o programa precisa. Só na primeira vez. |
 | `npm run start:fast` | **Liga tudo.** Configura se faltar, e sobe numa janela só. |
+| `npm run start:direto` | O mesmo, sem o menu: monta o site e sobe direto. |
 | `npm run tunel:criar` | Uma vez só: cria um endereço fixo, que não muda mais. |
 | `npm run configurar` | Refaz as perguntas da configuração. |
 | `npm run smoke` | Confere se está tudo funcionando por dentro. |
@@ -321,6 +371,10 @@ Para quem mexe no código:
 ## O que ainda não dá
 
 - **Compartilhar do celular.** Nenhum navegador de celular permite.
+- **Separar você do fundo em qualquer computador.** Onde o sistema não oferece
+  isso pronto, o que existe aqui é o recorte oval (veja "Câmera: fundo e GIF").
+  Fazer de verdade exigiria baixar um modelo de reconhecimento, e este programa
+  não baixa nada.
 - **Som de programa instalado** em tela cheia. Só som de aba (veja acima).
 - **Muita gente ao mesmo tempo.** Cada pessoa assistindo consome a qualidade
   escolhida, inteira. Em 2,5 Mb/s, cinco pessoas já são 12,5 Mb/s de subida; em

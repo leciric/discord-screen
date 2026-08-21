@@ -111,12 +111,15 @@ describe('/api/token', () => {
     expect((await resposta.json()).error).toContain('client credentials invalid');
   });
 
-  it('devolve erro interno quando a chamada explode', async () => {
+  it('culpa o Discord quando a troca do codigo explode', async () => {
     finge('https://discord.com/api/oauth2/token', () => {
       throw new Error('rede fora');
     });
 
-    expect((await post('/api/token', { code: 'abc' })).status).toBe(500);
+    const resposta = await post('/api/token', { code: 'abc' });
+
+    expect(resposta.status).toBe(502);
+    expect((await resposta.json()).error).toMatch(/Tente de novo/);
   });
 });
 

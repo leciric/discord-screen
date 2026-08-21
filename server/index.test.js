@@ -297,12 +297,18 @@ describe('/api/session', () => {
     expect(corpo.channel).toBeNull();
   });
 
-  it('devolve erro interno quando a chamada ao Discord explode', async () => {
+  it('culpa o Discord, e nao a si mesmo, quando a chamada explode', async () => {
     externas.set('https://discord.com/api/users/@me', () => {
       throw new Error('rede fora');
     });
 
-    expect((await post('/api/session', { access_token: 'x', instance_id: 'i' })).status).toBe(500);
+    const resposta = await post('/api/session', { access_token: 'x', instance_id: 'i' });
+
+    // 502 e nao 500: quem falhou foi o lado de la. A diferenca importa porque o
+    // texto vai direto para a tela de quem esta entrando, e "erro interno"
+    // mandava procurar o problema aqui dentro.
+    expect(resposta.status).toBe(502);
+    expect((await resposta.json()).error).toMatch(/Tente de novo/);
   });
 });
 

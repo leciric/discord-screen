@@ -35,6 +35,16 @@ const streams = new Map(); // slot -> { userId, canvas, player }
 const available = new Map(); // slot -> { userId, config }
 const watching = new Set(); // slots que eu pedi para assistir
 
+/**
+ * Telas que esta pessoa fechou de propósito.
+ *
+ * Existe por causa da abertura automática logo abaixo: sem a lista, fechar a
+ * única transmissão da sala seria desfeito no render seguinte, e o botão de
+ * parar de assistir reabriria o que acabou de fechar. Uma transmissão nova no
+ * mesmo slot limpa a marca — é outra coisa, e ninguém a dispensou.
+ */
+const dispensados = new Set();
+
 // Quem tem aba de captura aberta, segundo o servidor. É o que decide entre
 // falar com a aba existente e abrir outra.
 const abas = new Set();
@@ -251,11 +261,55 @@ function watchSlot(slot) {
 }
 
 function unwatchSlot(slot) {
+  dispensados.add(slot);
   watching.delete(slot);
   ws?.send(JSON.stringify({ type: 'unwatch', slot }));
   closeStream(slot);
   renderGrid();
   renderBar();
+}
+
+/**
+ * Uma transmissão só na sala abre sozinha.
+ *
+ * Assistir é opt-in porque o servidor não manda os quadros de quem ninguém
+ * pediu, e é essa economia que faz uma sala com várias telas caber na banda de
+ * todo mundo. Só que a escolha precisa ter mais de uma opção para ser escolha:
+ * com uma tela no ar, o convite "Assistir tela" é um clique cobrado para
+ * chegar ao único lugar aonde dava para ir — e quem entrou numa sala com uma
+ * tela no ar entrou justamente para vê-la.
+ *
+ * A partir da segunda transmissão o convite volta, porque aí a pergunta existe
+ * de verdade: baixar as duas custa o dobro, e qual delas interessa é resposta
+ * de quem assiste.
+ *
+ * A própria transmissão nunca entra: ela já aparece pela prévia local, sem
+ * passar pela rede, e baixá-la de volta seria pagar banda para ver o que está
+ * a um palmo daqui.
+ */
+function autoAssistir() {
+  const meu = session?.user?.id;
+  const outras = [...available.keys()].filter((slot) => available.get(slot)?.userId !== meu);
+  if (outras.length !== 1) return;
+
+  const [slot] = outras;
+  if (watching.has(slot) || dispensados.has(slot)) return;
+
+  // Adiado porque watchSlot chama renderGrid, e quem chama isto está dentro de
+  // um. As condições são conferidas de novo lá: entre um e outro a sala pode
+  // ter mudado, e a mais provável das mudanças é uma segunda tela entrando.
+  queueMicrotask(() => {
+    if (!available.has(slot) || watching.has(slot) || dispensados.has(slot)) return;
+    if (autoAssistirAlvo() !== slot) return;
+    watchSlot(slot);
+  });
+}
+
+/** O slot que a abertura automática escolheria agora, ou null. */
+function autoAssistirAlvo() {
+  const meu = session?.user?.id;
+  const outras = [...available.keys()].filter((slot) => available.get(slot)?.userId !== meu);
+  return outras.length === 1 ? outras[0] : null;
 }
 
 // --------------------------------------------------------------------- grade
@@ -401,6 +455,8 @@ function renderGrid() {
     // Adiado porque watchSlot chama renderGrid, e estamos dentro de um.
     if (!watching.has(alvo)) queueMicrotask(() => watchSlot(alvo));
   }
+
+  autoAssistir();
 
   const noPalco = activeSlot !== null;
   $('fullscreen').hidden = !noPalco;
@@ -2211,17 +2267,71 @@ window.addEventListener('keydown', (e) => {
 
 // ------------------------------------------------------------------- arranque
 
-boot().catch((err) => {
-  console.error(err);
-  setEmpty('Não foi possível entrar', err.message);
+/**
+ * O vigia do arranque, guardado aqui fora e não dentro de `boot`.
+ *
+ * Ele nascia local, e só o caminho de sucesso o desarmava. Toda falha de
+ * arranque então acontecia duas vezes na tela: primeiro o motivo de verdade
+ * ("O Discord recusou o login: …"), e oito segundos depois o palpite do vigia
+ * apagando aquilo e escrevendo "Sem resposta do servidor. Ele está no ar?".
+ *
+ * O segundo texto é o que ficava, porque depois dele não roda mais nada — e
+ * era ele que fazia qualquer tropeço na entrada parecer um aplicativo
+ * desligado, escondendo justamente a informação que resolveria o problema.
+ */
+let vigiaArranque = null;
+let arrancando = false;
+
+const desarmarVigia = () => {
+  clearTimeout(vigiaArranque);
+  vigiaArranque = null;
+};
+
+/**
+ * O arranque, com direito a segunda tentativa.
+ *
+ * Recarregar a página não serve dentro do Discord: o iframe pede a página de
+ * novo à hospedagem, e basta um X-Frame-Options no caminho para ele virar o
+ * retângulo branco. Então quem tenta de novo é o próprio arranque, no lugar.
+ */
+async function tentarArranque() {
+  if (arrancando) return;
+  arrancando = true;
+  $('emptyRetry').hidden = true;
+
+  try {
+    await boot();
+  } catch (err) {
+    console.error(err);
+    // Antes de escrever o motivo, e não depois: com o vigia ainda armado o
+    // texto abaixo teria oito segundos de vida.
+    desarmarVigia();
+    setEmpty('Não foi possível entrar', err.message);
+    $('empty').hidden = false;
+    $('emptyRetry').hidden = false;
+  } finally {
+    arrancando = false;
+  }
+}
+
+$('emptyRetry').addEventListener('click', () => {
+  setEmpty('Conectando…', 'Tentando de novo');
+  tentarArranque();
 });
+
+tentarArranque();
 
 async function boot() {
   // O painel inicial é estático. Sem este vigia, qualquer espera que não
   // termine fica com a cara de "Conectando…" para sempre, sem dizer o que
   // está faltando — que foi exatamente como este arranque ja travou.
-  const vigia = setTimeout(() => {
+  //
+  // O botão vai junto: dizer "está demorando" e não oferecer nada para fazer
+  // deixa quem está dentro do Discord sem saída nenhuma.
+  desarmarVigia();
+  vigiaArranque = setTimeout(() => {
     setEmpty('Está demorando…', 'Sem resposta do servidor. Ele está no ar?');
+    $('emptyRetry').hidden = false;
   }, 8000);
 
   // Buscada em paralelo, nunca antes: ela traz o diagnóstico de versão e o
@@ -2234,7 +2344,8 @@ async function boot() {
 
   clientId = params.get('client_id') || (await config).clientId || null;
   checkVersion((await config).asset);
-  clearTimeout(vigia);
+  desarmarVigia();
+  $('emptyRetry').hidden = true;
 
   renderProfileButton();
 
@@ -2288,6 +2399,7 @@ async function abrirPeloIngresso(ingresso) {
     history.replaceState(null, '', url);
   } catch (err) {
     setEmpty('Não foi possível abrir', err.message);
+    $('emptyRetry').hidden = false;
   }
 }
 
@@ -2302,7 +2414,11 @@ async function entrarNaCall() {
       session?.sala ?? (await post(`${P}/api/rooms/call`, { identity: session.identity }));
     openRoom(tokens, { id: tokens.roomId, name: 'Sala da call' });
   } catch (err) {
+    // O botão é a única saída dentro do Discord: sem ele, um tropeço aqui —
+    // e o /api/session fala com o Discord, então tropeça — deixa a atividade
+    // parada com cara de desligada até alguém fechá-la e abrir de novo.
     setEmpty('Não foi possível entrar', err.message);
+    $('emptyRetry').hidden = false;
   }
 }
 
@@ -2425,6 +2541,7 @@ function limparSala() {
   closeAllStreams();
   available.clear();
   watching.clear();
+  dispensados.clear();
   participants = [];
   lastRoomState = null;
   activeSlot = null;
@@ -2619,6 +2736,8 @@ function openRoom(tokens, room) {
 
   $('lobby').hidden = true;
   $('empty').hidden = false;
+  // A entrada deu certo: o convite a tentar de novo não tem mais o que tentar.
+  $('emptyRetry').hidden = true;
   $('share').hidden = false;
   $('camera').hidden = false;
   $('people').hidden = false;
@@ -2722,7 +2841,10 @@ async function authDiscord(fonteDoId) {
   }
 
   const clientId = id;
-  sdk = new DiscordSDK(clientId);
+  // Reaproveitado quando já existe: o arranque pode rodar de novo pelo botão
+  // de tentar outra vez, e um segundo DiscordSDK sobre o mesmo iframe disputa
+  // o canal de mensagens com o primeiro. `ready()` é idempotente.
+  sdk = sdk ?? new DiscordSDK(clientId);
   await sdk.ready();
 
   const { code } = await sdk.commands.authorize({
@@ -2889,7 +3011,11 @@ function connect() {
         info.fonte = s.fonte ?? 'tela';
         available.set(s.slot, info);
       }
-      for (const slot of [...available.keys()]) if (!live.has(slot)) available.delete(slot);
+      for (const slot of [...available.keys()]) {
+        if (live.has(slot)) continue;
+        available.delete(slot);
+        dispensados.delete(slot);
+      }
       for (const slot of [...streams.keys()]) if (!live.has(slot)) closeStream(slot);
       for (const slot of [...watching]) if (!live.has(slot)) watching.delete(slot);
       renderGrid();
@@ -2898,6 +3024,9 @@ function connect() {
       // Só anuncia; ninguém assiste até pedir.
       available.set(msg.slot, { userId: msg.userId, fonte: msg.fonte ?? 'tela', config: null });
       watching.delete(msg.slot);
+      // Transmissão nova no mesmo slot é outra transmissão: quem dispensou a
+      // anterior não dispensou esta.
+      dispensados.delete(msg.slot);
       closeStream(msg.slot);
       // A transmissão que acabou de ser anunciada pode ser a minha, e é aqui
       // que o slot dela passa a existir.
@@ -2930,6 +3059,7 @@ function connect() {
     } else if (msg.type === 'stream-stop') {
       available.delete(msg.slot);
       watching.delete(msg.slot);
+      dispensados.delete(msg.slot);
       endStream(msg.slot);
     } else if (msg.type === 'room-gone') {
       roomTokens = null;
@@ -2951,6 +3081,7 @@ function connect() {
     closeAllStreams();
     available.clear();
     watching.clear();
+    dispensados.clear();
     participants = [];
     renderGrid();
 

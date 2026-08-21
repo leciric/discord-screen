@@ -16,6 +16,7 @@
     "dev:rapido": "node scripts/dev.mjs --rapido",
     "start": "npm run build && npm -w server run start",
     "start:fast": "node scripts/start-fast.mjs",
+    "start:direto": "node scripts/start-fast.mjs --direto",
     "build": "npm -w client run build",
     "smoke": "node scripts/smoke.mjs",
     "smoke:controle": "node scripts/smoke-controle.mjs",

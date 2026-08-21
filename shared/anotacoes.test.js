@@ -275,6 +275,53 @@ describe('a camada', () => {
     expect(ctx.arc).not.toHaveBeenCalled();
   });
 
+  it('continuação de traço que não existe é ignorada', () => {
+    const { canvas, ctx } = canvasFalso();
+    const camada = criarCamada(canvas, { vista: vistaCheia });
+
+    // Pacote reordenado, ou continuação de um traço já apagado: o que não pode
+    // é a camada quebrar por causa de uma mensagem fora de ordem.
+    camada.aplicar({ uid: 'a', ev: { k: 'a', id: 99, pts: [1, 2] } });
+    // Continuação sem pontos é legítima: o agrupador pode descarregar vazio.
+    camada.aplicar({ uid: 'a', ev: { k: 's', id: 1, c: '#f00', w: 8, pts: [10, 10] } });
+    camada.aplicar({ uid: 'a', ev: { k: 'a', id: 1 } });
+    pintar();
+
+    expect(ctx.fill).toHaveBeenCalled();
+    expect(ctx.stroke).not.toHaveBeenCalled();
+  });
+
+  it('o laser em movimento deixa rabo de cometa', () => {
+    const { canvas, ctx } = canvasFalso();
+    const camada = criarCamada(canvas, { vista: vistaCheia });
+
+    // Um ponto só é uma bolinha parada; o rastro é o que mostra para onde a
+    // mão está indo, e é o que se vê numa tela grande a metros de distância.
+    for (const x of [10, 20, 30, 40]) {
+      camada.aplicar({ uid: 'a', name: 'A', ev: { k: 'p', x, y: 50, c: '#f00' } });
+      vi.advanceTimersByTime(30);
+    }
+    pintar();
+
+    expect(ctx.stroke).toHaveBeenCalled();
+    expect(ctx.arc).toHaveBeenCalled();
+  });
+
+  it('o rastro envelhece antes do ponto', () => {
+    const { canvas, ctx } = canvasFalso();
+    const camada = criarCamada(canvas, { vista: vistaCheia });
+
+    camada.aplicar({ uid: 'a', name: 'A', ev: { k: 'p', x: 10, y: 50, c: '#f00' } });
+    // Longe o bastante para o primeiro ponto sair do rastro, perto o bastante
+    // para o laser ainda estar aceso: sobra a bolinha, sem cometa.
+    vi.advanceTimersByTime(300);
+    camada.aplicar({ uid: 'a', name: 'A', ev: { k: 'p', x: 90, y: 50, c: '#f00' } });
+    pintar();
+
+    expect(ctx.arc).toHaveBeenCalled();
+    expect(ctx.stroke).not.toHaveBeenCalled();
+  });
+
   it('tirar o laser da tela o apaga na hora', () => {
     const { canvas, ctx } = canvasFalso();
     const camada = criarCamada(canvas, { vista: vistaCheia });
