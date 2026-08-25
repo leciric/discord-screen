@@ -302,6 +302,28 @@ tile mostrava a rodinha até o primeiro quadro, e o primeiro quadro nunca vinha.
 Hoje `SALTO_MS` reancora nos dois sentidos, e o vigia do tile troca a rodinha
 por "a imagem parou de chegar" com um botão que larga e pede de novo.
 
+## A senha da sala não é recuperável
+
+Vale dizer com todas as letras, porque é a primeira coisa que se procura no
+painel e não está lá: a senha de uma sala é guardada como `scrypt` sobre um sal
+aleatório (`hashPassword`), e o valor em claro não fica em lugar nenhum depois
+de definido — nem em memória, nem em log, nem em resposta de API. `stats`,
+`adminStats`, `listRooms` e o `roomState` devolvem no máximo `locked: true`.
+
+Então "esqueci a senha da sala" não tem resposta do tipo "consulte aqui". Tem
+esta: quem opera o servidor **substitui**. O painel, em cada sala, tem um campo
+de senha com "Definir" e "Remover" — `trocarSenhaPeloPainel`, que não passa pelo
+dono de propósito, porque quem esqueceu a senha costuma não estar por perto e a
+sala da call nem dono tem (`ownerId: null`). Remover também zera o castigo de
+tentativas: continuar bloqueado por uma senha que não existe mais seria absurdo.
+
+E a sala da call **nunca** tem senha. O id dela é `atividade-<instância>` ou
+`call-<canal>`, ela nasce em `ensureCallRoom` sem senha e com dono nulo, e o
+`join` dela nem chega a olhar senha — a porta é estar no canal de voz. Um link
+`/?sala=atividade-…` no site é recusado por isso, e não por falta de senha: a
+forma de abrir uma sala da call no site é o ingresso (`?t=…`) que a atividade
+emite, via `/api/rooms/open`.
+
 ## Diagnosticar depois, e não durante
 
 O servidor sempre soube o que mandou e nunca soube o que chegou. Todos os
@@ -321,7 +343,7 @@ Agora quem assiste manda um boletim curto a cada cinco segundos para
 | `atrasado` | a imagem anda, mas é velha — fila de decode funda ou lag alto |
 | `travado` | o contador de quadros não andou entre dois boletins |
 | `sem-imagem` | nunca desenhou nada: é o tile eterno em "Conectando…" |
-| `sem-decodificador` | o codec não subiu naquela máquina |
+| `sem-decodificador` | o codec não subiu naquela máquina — a linha diz qual |
 
 Duas decisões que valem a explicação: o **último** boletim, e não o histórico,
 porque o painel responde "como está agora"; e só as **mudanças** de estado
