@@ -2976,7 +2976,9 @@ function connect() {
       const s = streams.get(view.getUint8(0));
       if (!s) return;
       if (view.getUint8(1) === 3) s.audio?.push(e.data);
-      else s.player.push(e.data);
+      // A prévia local não tem decodificador: ela é a captura, não algo que
+      // veio pela rede. Byte que chegue para o slot dela não tem para onde ir.
+      else s.player?.push(e.data);
       return;
     }
 

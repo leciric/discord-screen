@@ -547,15 +547,23 @@ describe('pushChunk', () => {
   });
 
   describe('contrapressão', () => {
+    // Sem taxa medida ainda, o teto de fila é o piso: 64 KB.
+    const PISO = 64 * 1024;
+
     /** Um espectador cujo socket já está entupido. */
     function entupido(bytes) {
-      const { room, entry } = comTransmissao({ assistindo: false });
+      const { room, entry, ws } = comTransmissao({ assistindo: false });
       const lento = socket({ buffered: bytes });
       R.attachViewer(room, lento, pessoa('lento'));
       R.watch(room, lento, entry.slot);
       lento.limpar();
-      return { room, entry, lento };
+      // O watch acabou de pedir um keyframe, e o pedido tem intervalo mínimo.
+      // Zerar a marca é o que deixa o teste ver o pedido que ele provoca.
+      entry.lastKeyframeAsk = 0;
+      return { room, entry, lento, ws: ws.limpar() };
     }
+
+    const pediuKeyframe = (ws) => ws.tipos().includes('need-keyframe');
 
     it('descarta o delta de quem não vaza a fila', () => {
       const { room, entry, lento } = entupido(3 * 1024 * 1024);
@@ -577,7 +585,7 @@ describe('pushChunk', () => {
     });
 
     it('dá ao keyframe o dobro de folga, porque sem ele a tela não volta', () => {
-      const { room, entry, lento } = entupido(3 * 1024 * 1024);
+      const { room, entry, lento } = entupido(PISO + 1024);
 
       R.pushChunk(room, entry, quadro(entry.slot, KEYFRAME));
 
@@ -591,6 +599,75 @@ describe('pushChunk', () => {
 
       expect(lento.binarios()).toHaveLength(0);
       expect(entry.droppedChunks).toBe(1);
+    });
+
+    it('o teto é meio segundo de vídeo, e não um número fixo de bytes', () => {
+      vi.useFakeTimers();
+      try {
+        const { room, entry } = comTransmissao({ assistindo: false });
+
+        // Um segundo entregando 2 MB. Meio segundo disso é 1 MB de folga —
+        // dezesseis vezes o piso, e é o que um espectador desta transmissão
+        // pode ter na fila sem perder quadro.
+        for (let i = 0; i < 16; i++) {
+          R.pushChunk(room, entry, quadro(entry.slot, DELTA, 128 * 1024));
+        }
+        vi.advanceTimersByTime(1000);
+        R.pushChunk(room, entry, quadro(entry.slot, DELTA, 1));
+
+        const folgado = socket({ buffered: 512 * 1024 });
+        R.attachViewer(room, folgado, pessoa('folgado'));
+        R.watch(room, folgado, entry.slot);
+        folgado.limpar();
+        folgado.__primed.add(entry.slot);
+
+        R.pushChunk(room, entry, quadro(entry.slot, DELTA));
+
+        // Meio mega na fila passaria longe do piso de 64 KB, mas cabe nos 500 ms
+        // de uma transmissão gorda: é a taxa que manda, não o número redondo.
+        expect(folgado.binarios()).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('não gasta keyframe com quem ainda não drenou a fila', () => {
+      const { room, entry, lento, ws } = entupido(3 * 1024 * 1024);
+      lento.__primed.add(entry.slot);
+
+      // O delta estoura a fila. Pedir o keyframe agora seria mandar o quadro
+      // mais caro que existe pelo cano que acabou de entupir.
+      R.pushChunk(room, entry, quadro(entry.slot, DELTA));
+      expect(pediuKeyframe(ws)).toBe(false);
+      expect(lento.__primed.has(entry.slot)).toBe(false);
+
+      // E enquanto não drena, nem o keyframe é mandado.
+      R.pushChunk(room, entry, quadro(entry.slot, KEYFRAME));
+      expect(lento.binarios()).toHaveLength(0);
+
+      // Drenou: agora sim o pedido sai, e é o keyframe seguinte que devolve a
+      // imagem.
+      lento.bufferedAmount = 0;
+      R.pushChunk(room, entry, quadro(entry.slot, DELTA));
+      expect(pediuKeyframe(ws)).toBe(true);
+      expect(lento.binarios()).toHaveLength(0);
+
+      R.pushChunk(room, entry, quadro(entry.slot, KEYFRAME));
+      expect(lento.binarios()).toHaveLength(1);
+      expect(lento.__primed.has(entry.slot)).toBe(true);
+    });
+
+    it('quem drena bem na hora do keyframe aproveita o que chegou', () => {
+      const { room, entry, lento } = entupido(3 * 1024 * 1024);
+      lento.__primed.add(entry.slot);
+      R.pushChunk(room, entry, quadro(entry.slot, DELTA));
+
+      // Não há por que pedir outro ponto de partida quando o que chegou já é um.
+      lento.bufferedAmount = 0;
+      R.pushChunk(room, entry, quadro(entry.slot, KEYFRAME));
+
+      expect(lento.binarios()).toHaveLength(1);
+      expect(lento.__afogado.has(entry.slot)).toBe(false);
     });
   });
 });

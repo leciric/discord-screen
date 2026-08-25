@@ -31,7 +31,33 @@ export const FONTES = new Set(['tela', 'camera']);
 // Sala é objeto em memória criado por qualquer pessoa autenticada: sem teto,
 // um laço de "criar sala" consome a RAM do processo.
 const MAX_ROOMS_PER_INSTANCE = 20;
+
+/**
+ * Teto absoluto da fila de um espectador. Este é o freio de memória: sem ele,
+ * um espectador que parou de vazar faz o processo inteiro crescer.
+ */
 const MAX_BUFFERED_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Quanto atraso a fila de um espectador pode acumular antes de começarmos a
+ * descartar. Este é o freio de latência, e é outro problema do de cima.
+ *
+ * Dois megabytes protegem a memória e não protegem o tempo: num stream de
+ * 2,5 Mb/s eles são seis segundos e meio de vídeo esperando na fila de uma
+ * pessoa. Como TCP entrega em ordem e não sabe largar quadro velho, essa
+ * pessoa vê a tela parada e depois pulando — e o quadro em que a tela mudou
+ * de página está atrás de todos os outros. Era o teto que estava alto, não a
+ * rede que estava ruim.
+ *
+ * Meio segundo cobre a rajada de uma troca de cena e é menos do que se percebe
+ * como atraso. Passando disso, descartar é o que traz a imagem de volta ao
+ * presente — e o keyframe pedido logo em seguida é o que a recompõe.
+ */
+const ATRASO_RELAY_MS = 500;
+
+// Piso do teto acima: em bitrate baixo, meio segundo daria alguns quilobytes e
+// um keyframe sozinho estouraria a conta a cada vez.
+const TETO_RELAY_MIN = 64 * 1024;
 
 // Intervalo mínimo entre dois pedidos de keyframe para a mesma transmissão.
 const KEYFRAME_ASK_EVERY_MS = 1000;
@@ -162,6 +188,37 @@ function trafficSnapshot(counter, windowSeconds = 5) {
     transmittedBytesPerSecond: transmittedBytes / actualWindow,
     droppedBytesPerSecond: droppedBytes / actualWindow,
   };
+}
+
+/**
+ * Acompanha quantos bytes por segundo esta transmissão está entregando.
+ *
+ * Serve para uma coisa só: traduzir "quanto pode esperar na fila" de bytes para
+ * tempo. O `trafficSnapshot` já saberia responder, mas ele varre sessenta
+ * baldes, e aqui a pergunta é feita a cada quadro — o balde do segundo corrente
+ * é tudo o que esta conta precisa.
+ */
+function medirTaxa(entry, bytes) {
+  const segundo = Math.floor(Date.now() / 1000);
+  if (entry.taxaSegundo !== segundo) {
+    // Média móvel: uma rajada não vira teto permanente, e um segundo magro não
+    // derruba o teto em cima de quem estava bem.
+    if (entry.taxaSegundo !== undefined) {
+      entry.taxaBytes =
+        entry.taxaBytes === undefined
+          ? entry.taxaParcial
+          : entry.taxaBytes * 0.6 + entry.taxaParcial * 0.4;
+    }
+    entry.taxaSegundo = segundo;
+    entry.taxaParcial = 0;
+  }
+  entry.taxaParcial += bytes;
+}
+
+/** Quantos bytes podem esperar na fila de um espectador desta transmissão. */
+function tetoDe(entry) {
+  const porTempo = ((entry.taxaBytes ?? 0) * ATRASO_RELAY_MS) / 1000;
+  return Math.min(MAX_BUFFERED_BYTES, Math.max(TETO_RELAY_MIN, porTempo));
 }
 
 // Uma pessoa pode ter duas transmissões ao mesmo tempo, então o uid sozinho não
@@ -672,6 +729,11 @@ export function attachBroadcaster(room, ws, info, fonte = 'tela') {
     startedAt: null,
     traffic: trafficCounter(),
     droppedChunks: 0,
+    // Taxa medida desta transmissão, em bytes por segundo, e o segundo que está
+    // sendo somado agora. É o que traduz o teto de fila de bytes para tempo.
+    taxaBytes: undefined,
+    taxaSegundo: undefined,
+    taxaParcial: 0,
     ann: novaAnn(),
     // undefined = nunca dito. Vira true/false no primeiro espectador, e é o que
     // impede o servidor de repetir o mesmo recado a cada entrada e saída.
@@ -692,12 +754,19 @@ export function startStream(room, entry) {
   entry.startedAt = Date.now();
   entry.config = null;
   entry.audioConfig = null;
+  // Transmissão nova, taxa nova: uma câmera a 800 kb/s herdando o teto de uma
+  // tela a 5 Mb/s daria dez segundos de fila antes de descartar o primeiro
+  // quadro.
+  entry.taxaBytes = undefined;
+  entry.taxaSegundo = undefined;
+  entry.taxaParcial = 0;
   // Tela nova, quadro limpo: traço feito sobre a tela anterior não tem mais
   // sobre o que estar.
   entry.ann = novaAnn();
   // Transmissão nova recomeça do zero: ninguém assiste até pedir.
   for (const v of room.viewers) {
     v.__primed?.delete(entry.slot);
+    v.__afogado?.delete(entry.slot);
     v.__watching?.delete(entry.slot);
   }
   toViewers(room, {
@@ -728,10 +797,27 @@ export function setAudioConfig(room, entry, config) {
 export function setConfig(room, entry, config) {
   entry.config = config;
   // Config nova significa decoder recriado; ele volta a precisar de keyframe.
-  for (const v of room.viewers) v.__primed?.delete(entry.slot);
+  // O afogamento sai junto: quem estava esperando drenar não pode ficar preso
+  // numa espera pendurada num decodificador que nem existe mais.
+  for (const v of room.viewers) {
+    v.__primed?.delete(entry.slot);
+    v.__afogado?.delete(entry.slot);
+  }
   for (const v of room.viewers) {
     if (v.__watching?.has(entry.slot)) sendJson(v, { type: 'config', slot: entry.slot, config });
   }
+}
+
+/**
+ * Tira o espectador do fluxo desta transmissão até a fila dele drenar.
+ *
+ * Ele perde o ponto de partida (o próximo delta seria indecifrável de qualquer
+ * jeito) e entra na lista de quem espera drenar. Quem tira dela é o pushChunk,
+ * e é lá que o keyframe é pedido — no instante em que ele consegue recebê-lo.
+ */
+function afogar(ws, entry) {
+  ws.__primed?.delete(entry.slot);
+  ws.__afogado?.add(entry.slot);
 }
 
 export function pushChunk(room, entry, chunk) {
@@ -742,11 +828,20 @@ export function pushChunk(room, entry, chunk) {
 
   if (chunk[SLOT_BYTE] !== entry.slot) return;
 
+  medirTaxa(entry, bytes);
+  const teto = tetoDe(entry);
+
   const tipo = chunk[TYPE_BYTE];
   const isKeyframe = tipo === KEYFRAME;
   const isAudio = tipo === AUDIO;
   let sentCopies = 0;
   let droppedCopies = 0;
+
+  const descartar = () => {
+    room.droppedChunks++;
+    entry.droppedChunks++;
+    droppedCopies++;
+  };
 
   for (const v of room.viewers) {
     if (v.readyState !== v.OPEN) continue;
@@ -762,10 +857,8 @@ export function pushChunk(room, entry, chunk) {
     // Áudio não depende de keyframe — cada pacote Opus se decodifica sozinho —,
     // então não passa pelo controle de "já recebeu ponto de partida".
     if (isAudio) {
-      if (v.bufferedAmount > MAX_BUFFERED_BYTES) {
-        room.droppedChunks++;
-        entry.droppedChunks++;
-        droppedCopies++;
+      if (v.bufferedAmount > teto) {
+        descartar();
         continue;
       }
       v.send(chunk);
@@ -774,14 +867,29 @@ export function pushChunk(room, entry, chunk) {
       continue;
     }
 
-    if (isKeyframe) {
-      if (v.bufferedAmount > MAX_BUFFERED_BYTES * 2) {
-        room.droppedChunks++;
-        entry.droppedChunks++;
-        droppedCopies++;
-        // Sem este keyframe ele continua sem ponto de partida. Pedir outro é o
-        // que evita a espera pelo periódico, que é de segundos.
+    // Afogado: a fila dele estourou e ele foi despreparado. Enquanto ela não
+    // drenar, nada é mandado e nada é pedido — mandar o keyframe, que é o
+    // quadro mais caro que existe, pelo cano que acabou de entupir é o que
+    // fazia o ciclo se repetir a cada segundo em vez de acabar. O pedido sai
+    // quando a fila cair pela metade, que é quando ele tem chance de chegar.
+    if (v.__afogado?.has(entry.slot)) {
+      if (v.bufferedAmount > teto / 2) {
+        descartar();
+        continue;
+      }
+      v.__afogado.delete(entry.slot);
+      if (!isKeyframe) {
         requestKeyframe(entry);
+        descartar();
+        continue;
+      }
+      // Drenou e o que chegou já é keyframe: não há o que pedir, é este mesmo.
+    }
+
+    if (isKeyframe) {
+      if (v.bufferedAmount > teto * 2) {
+        descartar();
+        afogar(v, entry);
         continue;
       }
       v.send(chunk);
@@ -793,19 +901,15 @@ export function pushChunk(room, entry, chunk) {
 
     if (!v.__primed.has(entry.slot)) continue;
 
-    if (v.bufferedAmount > MAX_BUFFERED_BYTES) {
-      room.droppedChunks++;
-      entry.droppedChunks++;
-      droppedCopies++;
+    if (v.bufferedAmount > teto) {
+      descartar();
 
       // Um delta perdido quebra a cadeia de referência: daqui em diante o
       // decoder dele descarta tudo até chegar um keyframe. Continuar mandando
       // deltas seria despejar bytes indecifráveis numa conexão que já não vaza
       // — o buffer nunca drena, o descarte nunca para, e o vídeo fica parado
-      // por segundos. Despreparar corta esse ciclo, e o pedido de keyframe traz
-      // a imagem de volta em quadros em vez de em segundos.
-      v.__primed.delete(entry.slot);
-      requestKeyframe(entry);
+      // por segundos. Despreparar corta esse ciclo.
+      afogar(v, entry);
       continue;
     }
     v.send(chunk);
@@ -830,6 +934,7 @@ export function stopStream(room, entry) {
   entry.ann = novaAnn();
   for (const v of room.viewers) {
     v.__primed?.delete(entry.slot);
+    v.__afogado?.delete(entry.slot);
     v.__watching?.delete(entry.slot);
     v.__rtc?.delete(entry.slot);
   }
@@ -858,6 +963,7 @@ export function watch(room, ws, slot) {
 
   ws.__watching.add(slot);
   ws.__primed.delete(slot);
+  ws.__afogado?.delete(slot);
 
   if (entry.config) sendJson(ws, { type: 'config', slot, config: entry.config });
   if (entry.audioConfig) {
@@ -883,6 +989,7 @@ export function unwatch(room, ws, slot) {
   // Só avisa a sala se algo mudou de fato; ver a nota em watch().
   if (!ws.__watching.delete(slot)) return;
   ws.__primed.delete(slot);
+  ws.__afogado?.delete(slot);
   encerrarPeer(room, ws, slot);
   broadcastState(room);
 }
@@ -1167,6 +1274,9 @@ export function rtcAtivo(room, ws, slot, ativo) {
     // Voltando ao relay, o decoder dele está frio: sem keyframe novo ele
     // descartaria tudo até o periódico, que é de segundos.
     ws.__primed.delete(slot);
+    // A fila dele passou o tempo do WebRTC sem receber nada do relay: não há
+    // afogamento a herdar, e mantê-lo adiaria o keyframe que traz a imagem.
+    ws.__afogado?.delete(slot);
     requestKeyframe(entry, { urgente: true });
   }
 
@@ -1207,6 +1317,9 @@ function atualizarChunks(room, entry) {
 
 export function attachViewer(room, ws, info) {
   ws.__primed = new Set();
+  // Slots cuja fila estourou e ainda não drenou. Enquanto o slot está aqui, o
+  // relay não gasta um byte com ele — nem o keyframe que ele vai precisar.
+  ws.__afogado = new Set();
   ws.__watching = new Set();
   // Slots que já chegam por WebRTC. Enquanto o slot está aqui, o relay não
   // manda os bytes dele para este espectador — seria o mesmo vídeo duas vezes.

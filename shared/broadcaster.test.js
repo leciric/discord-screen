@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createBroadcaster,
   fonteIndisponivel,
+  nivelH264,
   opcoesTela,
   restricoesDeSom,
   supportError,
@@ -93,8 +94,33 @@ class StreamFalsa {
   }
 }
 
+/**
+ * Relógio de captura dos quadros de mentira, em microssegundos.
+ *
+ * Cada quadro nasce um intervalo de 30 fps depois do anterior, porque é assim
+ * que a captura de verdade entrega: instante de captura não se repete. Quadros
+ * com o mesmo timestamp são duplicatas, e o freio de ritmo do encodeFrame
+ * descarta duplicata — com um valor fixo aqui, metade dos testes passaria a
+ * medir o freio em vez do que eles querem medir.
+ */
+let relogioDeCaptura = 0;
+
+/**
+ * O H.264 que estes testes esperam: perfil High no nível que cabe em 1280×720 a
+ * 30 fps, que são o tamanho e a taxa de telaSimples() com opcoes().
+ *
+ * Escrito assim, e não como literal solto, porque o nível é derivado: mudar a
+ * resolução do dublê muda o nome do codec, e um literal deixaria o teste
+ * mentindo sobre o motivo de ter quebrado.
+ */
+const H264 = `avc1.6400${nivelH264(1280, 720, 30).toString(16)}`;
+
 /** Um quadro, do tamanho que o teste quiser. */
-const quadro = (displayWidth = 1280, displayHeight = 720, timestamp = 1000) => ({
+const quadro = (
+  displayWidth = 1280,
+  displayHeight = 720,
+  timestamp = (relogioDeCaptura += 33_333),
+) => ({
   displayWidth,
   displayHeight,
   timestamp,
@@ -149,7 +175,7 @@ class VideoEncoderFalso {
   }
 }
 VideoEncoderFalso.isConfigSupported = vi.fn(async (config) => ({
-  supported: config.codec === 'avc1.42E01E' && Boolean(config.avc),
+  supported: config.codec.startsWith('avc1.') && Boolean(config.avc),
   config,
 }));
 
@@ -307,6 +333,7 @@ async function noAr(extra = {}, stream = telaSimples()) {
 }
 
 beforeEach(() => {
+  relogioDeCaptura = 0;
   encoders = [];
   audioEncoders = [];
   sockets = [];
@@ -328,6 +355,50 @@ afterEach(() => {
 });
 
 // ------------------------------------------------------------------- testes
+
+describe('nivelH264', () => {
+  /**
+   * O bug que mais custou nesta base: o nome do codec pedia nível 3.0 fixo, e
+   * nível 3.0 aguenta 1620 macroblocos por quadro. Uma tela 1080p tem 8160. O
+   * navegador recusava, a escolha caía em VP8, e VP8 a 1080p não tem encoder
+   * por hardware — a taxa de quadros caía pela metade e ninguém sabia por quê.
+   */
+  it('não cabe uma tela 1080p no nível que este arquivo pedia', () => {
+    expect(nivelH264(1920, 1080, 30)).toBeGreaterThan(0x1e);
+  });
+
+  it('escolhe 4.0 para 1080p a 30 quadros', () => {
+    // 8160 macroblocos cabem nos 8192 do nível 4.0, e 244800 por segundo cabem
+    // nos 245760. Raspando nos dois — daí 60 fps já não caber.
+    expect(nivelH264(1920, 1080, 30)).toBe(0x28);
+  });
+
+  it('sobe para 4.2 quando a mesma tela vai a 60 quadros', () => {
+    // O quadro não mudou; o que estourou foi o teto por segundo.
+    expect(nivelH264(1920, 1080, 60)).toBe(0x2a);
+  });
+
+  it('não gasta nível à toa numa câmera pequena', () => {
+    // Câmera cabia no 3.0 e continua cabendo: pedir mais do que precisa é
+    // arriscar recusa em aparelho fraco sem ganhar nada.
+    expect(nivelH264(640, 480, 30)).toBe(0x1e);
+  });
+
+  it('acompanha a taxa também nas resoluções menores', () => {
+    expect(nivelH264(1280, 720, 30)).toBe(0x1f);
+    expect(nivelH264(1280, 720, 60)).toBe(0x20);
+  });
+
+  it('arredonda o quadro para cima em macroblocos de 16', () => {
+    // 1080 não é múltiplo de 16: são 68 linhas de macrobloco, não 67,5. Contar
+    // para baixo daria um nível que não cabe, que é o erro original.
+    expect(nivelH264(1920, 1080, 30)).toBe(nivelH264(1920, 1088, 30));
+  });
+
+  it('para no maior nível que existe em vez de inventar um', () => {
+    expect(nivelH264(7680, 4320, 120)).toBe(0x34);
+  });
+});
 
 describe('supportError', () => {
   it('não reclama de um navegador completo', () => {
@@ -394,7 +465,7 @@ describe('o que se pede ao navegador', () => {
     const o = opcoesTela({ fps: 15 });
 
     expect(o.audio).toBe(false);
-    expect(o.video).toEqual({ frameRate: { ideal: 15, max: 15 } });
+    expect(o.video).toEqual({ frameRate: { ideal: 15, max: 15 }, cursor: 'always' });
     // windowAudio/systemAudio sem áudio pedido seriam ignorados de qualquer
     // jeito, e mandá-los sugeriria que a captura tem som.
     expect(o.windowAudio).toBeUndefined();
@@ -413,7 +484,14 @@ describe('o que se pede ao navegador', () => {
   });
 
   it('trinta quadros quando ninguém escolheu', () => {
-    expect(opcoesTela().video).toEqual({ frameRate: { ideal: 30, max: 30 } });
+    expect(opcoesTela().video).toEqual({ frameRate: { ideal: 30, max: 30 }, cursor: 'always' });
+  });
+
+  it('pede o ponteiro sempre, em toda captura de tela', () => {
+    // Captura de aba no Chromium vem sem ponteiro quando ninguém pede, e aí
+    // quem assiste vê o texto sendo apontado sem ver a mão que aponta.
+    expect(opcoesTela().video.cursor).toBe('always');
+    expect(opcoesTela({ fps: 60, comSom: true }).video.cursor).toBe('always');
   });
 
   it('o vídeo pedido ganha da taxa', () => {
@@ -478,7 +556,7 @@ describe('start', () => {
     const { encoder } = await noAr();
 
     expect(encoder.configuracoes[0]).toMatchObject({
-      codec: 'avc1.42E01E',
+      codec: H264,
       avc: { format: 'annexb' },
       latencyMode: 'realtime',
       bitrate: 2_500_000,
@@ -490,9 +568,7 @@ describe('start', () => {
     const onStatus = vi.fn();
     await noAr({ onStatus });
 
-    expect(onStatus).toHaveBeenCalledWith(
-      expect.objectContaining({ codec: 'avc1.42E01E', direct: true }),
-    );
+    expect(onStatus).toHaveBeenCalledWith(expect.objectContaining({ codec: H264, direct: true }));
   });
 
   it('reduz uma tela 4K até o teto de 1920x1080, sem cortar', async () => {
@@ -537,12 +613,12 @@ describe('start', () => {
     VideoEncoderFalso.isConfigSupported.mockImplementation(async (config) => ({
       supported:
         config.codec === 'vp8' ||
-        (config.codec === 'avc1.42E01E' && config.bitrateMode === undefined),
+        (config.codec.startsWith('avc1.') && config.bitrateMode === undefined),
     }));
 
     const { encoder } = await noAr();
 
-    expect(encoder.configuracoes[0].codec).toBe('avc1.42E01E');
+    expect(encoder.configuracoes[0].codec).toBe(H264);
     expect(encoder.configuracoes[0]).not.toHaveProperty('bitrateMode');
   });
 
@@ -554,16 +630,30 @@ describe('start', () => {
     const { encoder } = await noAr();
 
     expect(encoder.configuracoes[0]).toMatchObject({
-      codec: 'avc1.42E01E',
+      codec: H264,
       bitrateMode: 'constant',
       latencyMode: 'realtime',
     });
   });
 
+  it('cai para o Baseline no navegador que só ofereça ele', async () => {
+    // High e Main recusados: sobra o perfil que roda onde nada mais roda, e o
+    // nível continua sendo o que cabe no quadro.
+    VideoEncoderFalso.isConfigSupported.mockImplementation(async (config) => ({
+      supported: config.codec.startsWith('avc1.42e0'),
+    }));
+
+    const { encoder } = await noAr();
+
+    expect(encoder.configuracoes[0].codec).toBe(
+      `avc1.42e0${nivelH264(1280, 720, 30).toString(16)}`,
+    );
+  });
+
   it('mantém o tempo real acima do bitrate constante dentro do mesmo codec', async () => {
     VideoEncoderFalso.isConfigSupported.mockImplementation(async (config) => ({
       supported:
-        config.codec === 'avc1.42E01E' &&
+        config.codec.startsWith('avc1.') &&
         Boolean(config.avc) &&
         !(config.latencyMode === 'realtime' && config.bitrateMode === 'constant'),
     }));
@@ -672,6 +762,63 @@ describe('quadros', () => {
     expect(frame.fechado).toBe(true);
   });
 
+  it('só volta a aceitar quando a fila da subida cai pela metade', async () => {
+    const contexto = await noAr();
+    const track = contexto.stream.getVideoTracks()[0];
+
+    // Teto de 2,5 Mb/s em meio segundo são 156 KB. Depois de afogar, 100 KB
+    // ainda é apuros: sem a histerese a fila voltaria em dois quadros.
+    contexto.ws.bufferedAmount = 512 * 1024;
+    processadorDe(track).empurrar(quadro(1280, 720, 1_000_000));
+    await respirar();
+
+    contexto.ws.bufferedAmount = 100 * 1024;
+    processadorDe(track).empurrar(quadro(1280, 720, 2_000_000));
+    await respirar();
+
+    expect(contexto.encoder.codificados).toHaveLength(0);
+  });
+
+  it('descarta o quadro quando a subida não vaza', async () => {
+    const contexto = await noAr();
+    const track = contexto.stream.getVideoTracks()[0];
+
+    // 2,5 Mb/s são 312 KB por segundo; meio segundo disso é o teto. Meio mega
+    // esperando na fila é mais de um segundo de vídeo no passado, e como TCP
+    // entrega em ordem, é atraso que todo quadro seguinte herda.
+    contexto.ws.bufferedAmount = 512 * 1024;
+    const segurado = quadro(1280, 720, 1_000_000);
+    processadorDe(track).empurrar(segurado);
+    await respirar();
+
+    expect(contexto.encoder.codificados).toHaveLength(0);
+    expect(segurado.fechado).toBe(true);
+  });
+
+  it('volta com um keyframe quando a fila da subida drena', async () => {
+    const contexto = await noAr();
+    const track = contexto.stream.getVideoTracks()[0];
+
+    // O primeiro quadro já sai como keyframe; é o de depois do afogamento que
+    // este teste quer ver.
+    processadorDe(track).empurrar(quadro(1280, 720, 1_000_000));
+    await respirar();
+
+    contexto.ws.bufferedAmount = 512 * 1024;
+    processadorDe(track).empurrar(quadro(1280, 720, 2_000_000));
+    await respirar();
+
+    contexto.ws.bufferedAmount = 0;
+    processadorDe(track).empurrar(quadro(1280, 720, 3_000_000));
+    await respirar();
+
+    // Os deltas que ficaram para trás quebraram a cadeia de referência de quem
+    // estava no relay: retomar com delta deixaria a tela parada até o keyframe
+    // periódico, que é de segundos.
+    expect(contexto.encoder.codificados).toHaveLength(2);
+    expect(contexto.encoder.codificados.at(-1).opcoes).toEqual({ keyFrame: true });
+  });
+
   it('reconfigura o encoder quando a fonte muda de tamanho', async () => {
     const { encoder, stream } = await comQuadro(quadro(1280, 720));
 
@@ -721,7 +868,7 @@ describe('quadros', () => {
 
     encoder.output(chunkFalso(), {
       decoderConfig: {
-        codec: 'avc1.42E01E',
+        codec: H264,
         codedWidth: 1280,
         codedHeight: 720,
         description: new Uint8Array([1, 2, 3]).buffer,
@@ -729,7 +876,7 @@ describe('quadros', () => {
     });
 
     const config = ws.mensagens().find((m) => m.type === 'config');
-    expect(config.config).toMatchObject({ codec: 'avc1.42E01E', codedWidth: 1280 });
+    expect(config.config).toMatchObject({ codec: H264, codedWidth: 1280 });
     // AQID é base64 de 0x01 0x02 0x03: a descrição vai binária, não como texto.
     expect(config.config.description).toBe('AQID');
   });
@@ -766,6 +913,121 @@ describe('quadros', () => {
     await respirar();
 
     expect(encoder.codificados).toHaveLength(0);
+  });
+});
+
+describe('ritmo de entrada', () => {
+  /** Empurra quadros com os instantes de captura dados, em ms. */
+  async function entregar(contexto, instantes) {
+    const track = contexto.stream.getVideoTracks()[0];
+    for (const ms of instantes) {
+      processadorDe(track).empurrar(quadro(1280, 720, Math.round(ms * 1000)));
+      await respirar();
+    }
+  }
+
+  it('deixa passar tudo quando a origem entrega na taxa pedida', async () => {
+    const contexto = await noAr({ fps: 30 });
+
+    await entregar(contexto, [0, 33.3, 66.7, 100, 133.3]);
+
+    expect(contexto.encoder.codificados).toHaveLength(5);
+  });
+
+  it('derruba a metade quando a origem entrega o dobro do pedido', async () => {
+    const contexto = await noAr({ fps: 30 });
+
+    // 60 Hz num alvo de 30: sem freio, o encoder emitiria o dobro de quadros
+    // com o tamanho de um alvo de 30 — e a saída dobraria o bitrate pedido.
+    await entregar(contexto, [0, 16.7, 33.3, 50, 66.7, 83.3, 100]);
+
+    expect(contexto.encoder.codificados).toHaveLength(4);
+  });
+
+  it('absorve o tremor da captura a 60 fps em vez de derrubar quadro bom', async () => {
+    const contexto = await noAr({ fps: 60 });
+
+    // 60 Hz tremendo uns milissegundos, que é como captura de tela entrega de
+    // verdade. Com a tolerância proporcional antiga — 15% de 16,7 ms — o freio
+    // derrubava metade destes ao acaso, e a taxa virava cara ou coroa.
+    await entregar(contexto, [0, 13.9, 34.2, 49.1, 68.3, 82.6, 101.4]);
+
+    expect(contexto.encoder.codificados).toHaveLength(7);
+  });
+
+  it('não escorrega a taxa quando um quadro chega atrasado', async () => {
+    const contexto = await noAr({ fps: 30 });
+
+    // O terceiro chega 12 ms tarde e os seguintes voltam à grade. Medindo
+    // contra o último aceito, o atraso empurraria a régua e derrubaria o
+    // quarto; contra a grade, atraso de um é atraso de um só.
+    await entregar(contexto, [0, 33.3, 78.7, 100, 133.3, 166.7]);
+
+    expect(contexto.encoder.codificados).toHaveLength(6);
+  });
+
+  it('recomeça a grade quando o relógio da origem salta para trás', async () => {
+    const contexto = await noAr({ fps: 30 });
+
+    await entregar(contexto, [1000, 1033.3]);
+    // Tela nova, relógio novo: o salto denuncia que a régua antiga não vale.
+    await entregar(contexto, [0, 33.3]);
+
+    expect(contexto.encoder.codificados).toHaveLength(4);
+  });
+});
+
+describe('fila do encoder', () => {
+  async function empurrar(contexto, quantos) {
+    const track = contexto.stream.getVideoTracks()[0];
+    for (let i = 0; i < quantos; i++) {
+      processadorDe(track).empurrar(quadro());
+      await respirar();
+    }
+  }
+
+  it('segura o descarte até a fila esvaziar de verdade', async () => {
+    const contexto = await noAr();
+
+    // Afoga o encoder, e depois devolve a fila ao valor que, sem histerese,
+    // já voltaria a aceitar. Com ela, ainda não: 2 continua sendo apuros.
+    contexto.encoder.encodeQueueSize = 5;
+    await empurrar(contexto, 1);
+    contexto.encoder.encodeQueueSize = 2;
+    await empurrar(contexto, 1);
+
+    expect(contexto.encoder.codificados).toHaveLength(0);
+  });
+
+  it('volta a aceitar quando a fila desce a um', async () => {
+    const contexto = await noAr();
+
+    contexto.encoder.encodeQueueSize = 5;
+    await empurrar(contexto, 1);
+    contexto.encoder.encodeQueueSize = 1;
+    await empurrar(contexto, 1);
+
+    expect(contexto.encoder.codificados).toHaveLength(1);
+  });
+
+  it('o descarte por fila não consome a marca do ritmo', async () => {
+    const contexto = await noAr({ fps: 30 });
+    const track = contexto.stream.getVideoTracks()[0];
+
+    // Um quadro morre na fila e o seguinte vem 20 ms depois — perto demais para
+    // o alvo de 30 fps. Mas o primeiro nunca chegou a ocupar marca nenhuma, a
+    // grade ainda não começou, e é este que a começa. Antes o descarte por fila
+    // já tinha mexido na régua, e este quadro morria por causa de um quadro que
+    // o encoder nem chegou a ver.
+    contexto.encoder.encodeQueueSize = 5;
+    processadorDe(track).empurrar(quadro(1280, 720, 0));
+    await respirar();
+
+    contexto.encoder.encodeQueueSize = 0;
+    processadorDe(track).empurrar(quadro(1280, 720, 20_000));
+    await respirar();
+
+    expect(contexto.encoder.codificados).toHaveLength(1);
   });
 });
 

@@ -188,6 +188,46 @@ garante que ninguém fica sem imagem por causa de um roteador.
 mas não quem está atrás de CGNAT. Um TURN encaminha o vídeo de verdade — custa
 banda, e por isso é escolha de quem hospeda, não padrão.
 
+## Fila é atraso, e atraso não sai sozinho
+
+Este é o problema que mais aparece de fora como "travou" e "está atrasado", e
+ele tem sempre a mesma forma: alguém aceitou guardar bytes que não conseguia
+entregar.
+
+`WebSocket.send` nunca recusa. O que a rede não leva vira fila dentro do
+navegador, e TCP entrega em ordem — então o quadro novo fica atrás de todos os
+velhos. A imagem não fica pior, ela fica no passado, e como o encoder continua
+produzindo no bitrate combinado, a fila só cresce. É isso que se vê quando
+alguém troca de página e a tela nova demora segundos para aparecer do outro
+lado: o quadro em que a página mudou está no fim de uma fila.
+
+Pior: essa fila é **gulosa**. Ela divide a subida de quem transmite com as
+conexões WebRTC dos espectadores diretos, e o controle de congestionamento do
+WebRTC cede espaço para quem não cede. Uma fila de WebSocket sem freio faz os
+espectadores de WebRTC travarem — e eles são justamente os que deveriam estar
+melhor.
+
+Por isso existem dois freios, e os dois são medidos em **tempo**, não em bytes:
+
+- **Na subida de quem transmite** (`ATRASO_REDE_MS`, no broadcaster). Passando
+  de meio segundo de vídeo esperando no socket, o quadro é largado antes de
+  entrar no encoder — poupa CPU e não acrescenta atraso. Sair do afogamento
+  exige a fila cair pela metade, senão ela volta em dois quadros, e o primeiro
+  quadro que volta é sempre keyframe: os deltas largados quebraram a cadeia de
+  referência de todo mundo que estava no relay.
+- **Na saída para cada espectador** (`ATRASO_RELAY_MS`, no servidor). O teto
+  antigo era fixo em 2 MB, e 2 MB protegem a memória sem proteger o tempo: num
+  stream de 2,5 Mb/s são seis segundos e meio de vídeo esperando na fila de uma
+  pessoa. Agora o teto é meio segundo da taxa medida daquela transmissão, com o
+  teto de memória de 2 MB continuando por cima como último freio.
+
+E o keyframe de recuperação só é pedido **depois** de a fila daquele espectador
+drenar. Antes disso ele era pedido na hora, e o resultado era um ciclo: manda o
+quadro mais caro que existe pelo cano que acabou de entupir, ele chega tarde ou
+é descartado, pede de novo um segundo depois. O ciclo travava a tela de quem
+estava apertado e, como o keyframe vai para a sala inteira, gastava a banda de
+todo mundo para isso. Agora quem afogou sai do fluxo até conseguir receber.
+
 ## Detalhes que não são acidentais
 
 - **`latencyMode: 'realtime'`** no codificador e **`optimizeForLatency: true`**
@@ -195,13 +235,38 @@ banda, e por isso é escolha de quem hospeda, não padrão.
   melhor, mas é atraso que nunca mais sai.
 - **`frame.close()`** depois de desenhar. `VideoFrame` segura memória de GPU;
   sem isso a aba trava em segundos.
-- **Descartar quadro quando a fila do codificador passa de 2.** Fila vira
-  atraso permanente. Melhor perder um quadro do que carregar o atraso.
+- **Descartar quadro quando a fila do codificador passa de 2, e só voltar a
+  aceitar quando ela desce a 1.** Fila vira atraso permanente, e a histerese é o
+  que separa uma taxa menor de uma taxa que balança: com a carga em cima do
+  limite, um limiar seco faz o encoder aceitar, atrasar, descartar e alcançar a
+  cada quadro — não se vê "menos quadros", vê-se tranco.
+- **O ritmo é medido contra uma grade ideal, não contra o último quadro
+  aceito.** Contra o último aceito, um quadro atrasado leva a régua junto e a
+  taxa escorrega para baixo sozinha. A tolerância é meio intervalo, que é a
+  maior que ainda escolhe um quadro só por marca — já foi 15% do intervalo, e a
+  60 fps isso era menos que o tremor da própria captura: o freio derrubava
+  quadro bom ao acaso e a taxa virava cara ou coroa entre 60 e 30.
 - **`track.contentHint = 'text'`.** Avisa que é tela, não vídeo — mantém texto
   nítido em vez de suavizar bordas.
-- **Backpressure no relay.** Se o socket de alguém acumula mais de 2 MB, o
-  servidor descarta quadros para essa pessoa em vez de enfileirar. Sem isso, um
-  espectador com internet ruim derruba o processo por consumo de memória.
+- **`cursor: 'always'` em toda captura de tela.** Captura de aba no Chromium vem
+  sem ponteiro quando ninguém pede, e quem assiste vê o texto sendo apontado sem
+  ver a mão que aponta. É constraint básica, não `exact`: onde o navegador não a
+  conhece ela é ignorada em silêncio, e onde o sistema não entrega o ponteiro o
+  resultado é o de antes — daí "sempre que der", e não "sempre".
+- **O nível do H.264 é derivado do quadro, não fixo.** Os dois últimos dígitos
+  do nome do codec são o nível, e ele é um contrato sobre tamanho de quadro e
+  macroblocos por segundo. Este arquivo pedia `1E` — nível 3.0, que aguenta
+  720×576 — desde sempre, e uma tela 1080p tem cinco vezes isso: o navegador
+  recusava a configuração inteira e a escolha caía em VP8, que a 1080p não tem
+  encoder por hardware em máquina nenhuma comum. Compartilhamento de tela nunca
+  codificou em H.264 nesta base; só a câmera, que captura pequeno o bastante
+  para caber. Agora `nivelH264` escolhe o menor nível que aguenta o quadro e a
+  taxa, e o `syncSize` acompanha quando a janela capturada muda de tamanho no
+  meio da transmissão.
+- **Backpressure no relay, medido em tempo.** Ver a seção "Fila é atraso" acima.
+  O teto de 2 MB continua existindo — ele é o freio de memória, sem o qual um
+  espectador que parou de vazar derruba o processo. Mas quem decide o descarte
+  no dia a dia é o freio de latência, que é outro problema.
 - **A troca de transporte é decidida pelo primeiro quadro, não pelo
   `connectionState`.** Um peer "connected" que não entrega nada é
   indistinguível de um travamento — e desligar o relay confiando nele deixaria

@@ -17,8 +17,8 @@ compartilha por link.
 Baixe em [nodejs.org](https://nodejs.org), escolha a versão **LTS** e instale
 clicando em avançar até o fim. Não precisa configurar nada.
 
-**2. Google Chrome, Edge, Brave ou Opera** — só para quem vai *mostrar* a tela.
-Para *assistir*, qualquer navegador serve.
+**2. Google Chrome, Edge, Brave ou Opera** — só para quem vai _mostrar_ a tela.
+Para _assistir_, qualquer navegador serve.
 
 > Não funciona no celular para compartilhar. Celular não deixa nenhum site
 > capturar a tela. Assistir pelo celular também costuma falhar.
@@ -80,7 +80,7 @@ sala daquela call, junto com o resto do pessoal que está lá.
 
 Por padrão o endereço público é descartável: **ele muda toda vez que você
 desliga e liga o programa**. E aí a atividade para de abrir, até você ir no site
-do Discord trocar o *Target* pelo endereço novo.
+do Discord trocar o _Target_ pelo endereço novo.
 
 Para acabar com isso de vez, rode **uma única vez**:
 
@@ -93,7 +93,7 @@ e já deixa tudo escrito na configuração. Depois disso o endereço nunca mais
 muda, e você não mexe no site do Discord de novo.
 
 > Precisa de um domínio seu já na Cloudflare. Se não tiver, siga com o
-> descartável mesmo — só lembre de atualizar o *Target* quando reiniciar.
+> descartável mesmo — só lembre de atualizar o _Target_ quando reiniciar.
 
 ---
 
@@ -144,11 +144,11 @@ naquele servidor, o painel mostra o Guild ID sem impedir as outras métricas.
 Quem assiste não fica só olhando. Passando o mouse sobre a tela em destaque
 aparece uma barrinha no alto, com o que dá para fazer:
 
-| Ferramenta | Atalho | O que faz |
-|---|---|---|
-| **Mover** | `V` | Arrasta a imagem depois de ampliada. |
-| **Laser** | `L` | Um ponto luminoso com o seu nome, que todo mundo vê seguir o seu mouse. Some sozinho quando você para. |
-| **Desenhar** | `C` | Risca por cima da tela. O traço fica lá até alguém apagar. |
+| Ferramenta   | Atalho | O que faz                                                                                              |
+| ------------ | ------ | ------------------------------------------------------------------------------------------------------ |
+| **Mover**    | `V`    | Arrasta a imagem depois de ampliada.                                                                   |
+| **Laser**    | `L`    | Um ponto luminoso com o seu nome, que todo mundo vê seguir o seu mouse. Some sozinho quando você para. |
+| **Desenhar** | `C`    | Risca por cima da tela. O traço fica lá até alguém apagar.                                             |
 
 E ao lado: o **olho** (`O`), que esconde todos os desenhos — **só para você**,
 para dar uma olhada limpa no que está embaixo; ninguém mais perde nada, e o que
@@ -292,7 +292,7 @@ vídeo, igual à câmera.
 
 **A atividade não abre, ou fica só um retângulo branco**
 O endereço público mudou. Vá no site do Discord em **Activities → URL Mappings**
-e troque o *Target* pelo endereço que aparece na janela preta. Para isso não
+e troque o _Target_ pelo endereço que aparece na janela preta. Para isso não
 acontecer nunca mais, rode `npm run tunel:criar`.
 
 **"A porta 31415 já está sendo usada"**
@@ -319,6 +319,16 @@ Abra o botão ⓘ na barra de baixo e olhe a linha **Som**. Ela diz em qual dos
 casos você está: sem áudio na transmissão, esperando o áudio, silenciado aí, ou
 tocando.
 
+**A minha tela trava para as outras pessoas, ou aparece atrasada**
+Quase sempre é a sua internet de subida não comportando a qualidade escolhida —
+o plano de casa costuma subir bem menos do que baixa. Quando isso acontece, a
+aba de captura avisa: _"Sua conexão não está dando conta de subir X Mb/s"_.
+Baixe a qualidade ou a taxa de quadros na engrenagem e o aviso some.
+
+Se o aviso não aparece e mesmo assim uma pessoa específica vê a tela travando,
+é a internet **dela**. Cada pessoa recebe no seu ritmo, então uma travando não
+significa nada sobre as outras.
+
 **Quero mudar alguma configuração**
 Rode `npm run configurar`. Ele lembra do que você já respondeu — é só apertar
 Enter no que não mudou.
@@ -341,30 +351,30 @@ Você precisa de uma hospedagem que rode Node.js. Lá dentro:
    - `PUBLIC_ORIGIN` para o endereço do seu site (ex: `https://tela.seusite.com`)
 4. Rode `npm start`.
 
-No site do Discord, troque o *Target* e o *Redirect* pelo endereço do seu site.
+No site do Discord, troque o _Target_ e o _Redirect_ pelo endereço do seu site.
 Aí nenhum túnel é necessário.
 
 ---
 
 ## Comandos, resumidos
 
-| Comando | Para quê |
-|---|---|
-| `npm install` | Baixa o que o programa precisa. Só na primeira vez. |
-| `npm run start:fast` | **Liga tudo.** Configura se faltar, e sobe numa janela só. |
-| `npm run start:direto` | O mesmo, sem o menu: monta o site e sobe direto. |
-| `npm run tunel:criar` | Uma vez só: cria um endereço fixo, que não muda mais. |
-| `npm run configurar` | Refaz as perguntas da configuração. |
-| `npm run smoke` | Confere se está tudo funcionando por dentro. |
+| Comando                | Para quê                                                   |
+| ---------------------- | ---------------------------------------------------------- |
+| `npm install`          | Baixa o que o programa precisa. Só na primeira vez.        |
+| `npm run start:fast`   | **Liga tudo.** Configura se faltar, e sobe numa janela só. |
+| `npm run start:direto` | O mesmo, sem o menu: monta o site e sobe direto.           |
+| `npm run tunel:criar`  | Uma vez só: cria um endereço fixo, que não muda mais.      |
+| `npm run configurar`   | Refaz as perguntas da configuração.                        |
+| `npm run smoke`        | Confere se está tudo funcionando por dentro.               |
 
 Para quem mexe no código:
 
-| Comando | Para quê |
-|---|---|
-| `npm run dev` | Site, servidor e túnel juntos, remontando a cada arquivo salvo. |
-| `npm run dev:rapido` | O mesmo, mas com endereço descartável e sem tocar no `.env`. |
-| `npm start` | Monta o site e sobe só o servidor, sem túnel. |
-| `npm run tunel` | Só o túnel, numa janela separada. |
+| Comando              | Para quê                                                        |
+| -------------------- | --------------------------------------------------------------- |
+| `npm run dev`        | Site, servidor e túnel juntos, remontando a cada arquivo salvo. |
+| `npm run dev:rapido` | O mesmo, mas com endereço descartável e sem tocar no `.env`.    |
+| `npm start`          | Monta o site e sobe só o servidor, sem túnel.                   |
+| `npm run tunel`      | Só o túnel, numa janela separada.                               |
 
 ---
 
