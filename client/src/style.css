@@ -1072,6 +1072,9 @@ button {
   background: var(--tile);
   color: var(--text);
   font: 500 14px/1 inherit;
+  /* O botão também é usado como link (a página do servidor abre em aba
+     própria), e âncora nasce sublinhada. */
+  text-decoration: none;
   transition:
     background 0.15s,
     color 0.15s;

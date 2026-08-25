@@ -99,26 +99,48 @@ muda, e você não mexe no site do Discord de novo.
 
 ## Painel administrativo
 
-O painel tem cinco abas, e cada uma responde uma pergunta:
+O painel tem a cara do Discord de propósito: barra de servidores à esquerda,
+salas como canais, quem está dentro como lista de membros. Quem administra isto
+passa o dia lá dentro, e um painel com gramática própria é uma gramática a
+aprender numa noite em que alguma coisa está quebrada.
 
-- **Visão geral** — está funcionando? Pessoas, transmissões, banda, ping,
+Cada canal responde uma pergunta:
+
+- **visão-geral** — está funcionando? Pessoas, transmissões, banda, ping,
   gráfico de tráfego, CPU/memória/disco e o ambiente do processo.
-- **Salas** — abra uma e veja cada transmissão por dentro: codec, resolução,
-  quanto ela está entregando por segundo, e a fila de cada pessoa que assiste
-  contra o teto que decide o descarte. É aqui que "está travando" vira "está
-  travando por causa disto".
-- **Pessoas** — quem está online, com ping, fila e quanto já recebeu.
-- **Diagnóstico** — o que está fora do normal agora, em português, com o que
-  fazer a respeito; e o log do servidor ao vivo, com filtro por nível e origem.
-  É o mesmo log do terminal do servidor, sem precisar de um terminal.
-- **Ajustes** — os números do relay, editáveis com o servidor no ar. Valem na
+- **Cada sala é um canal**, com os avatares de quem está dentro embaixo do nome,
+  como um canal de voz. Abra uma e veja cada transmissão por dentro: codec,
+  resolução, quanto ela está entregando por segundo, e a fila de cada pessoa que
+  assiste contra o teto que decide o descarte. É aqui que "está travando" vira
+  "está travando por causa disto".
+- **pessoas** — quem está online, com ping, fila e quanto já recebeu. Clicar num
+  nome abre o cartão daquela pessoa, com tudo o que se sabe dela e o que dá para
+  fazer com ela.
+- **diagnóstico** — o que está fora do normal agora, em português, com o que
+  fazer a respeito; e o log do servidor ao vivo, com busca, filtro por nível e
+  origem, e o que veio junto de cada linha aparecendo no clique. É o mesmo log do
+  terminal do servidor, sem precisar de um terminal.
+- **ajustes** — os números do relay, editáveis com o servidor no ar. Valem na
   hora e voltam ao padrão quando o servidor reinicia.
+- **json-cru** — a resposta inteira de `/api/admin/metrics`, colorida e
+  filtrável, para a pergunta que a tela ainda não responde.
 
-E cinco botões que consertam coisas sem deploy: pedir keyframe (traz de volta
-uma tela parada), limpar desenhos, limpar o quadro, parar uma transmissão,
-derrubar uma conexão zumbi e fechar uma sala. Todos dizem quantos afetaram —
-"ok" tanto quando agiu quanto quando não achou nada é resposta que ensina a não
-confiar no botão.
+E as coisas que encurtam uma investigação:
+
+- **Ctrl+K** abre o "ir para" — teclar o nome de uma sala ou de uma pessoa
+  sempre foi mais rápido do que caçar a linha numa lista que se mexe sozinha.
+- **Copiar** e **baixar** o JSON deste instante, na barra de cima, e o log em
+  texto no canal de diagnóstico. É o que se manda para outra pessoa investigar
+  junto.
+- **Clicar num ícone de servidor** à esquerda passa a mostrar só o que é dele.
+  CPU, memória e disco continuam sendo da máquina inteira, e a barra diz isso.
+- **R** atualiza na hora, fora de campo de texto.
+
+E os botões que consertam coisas sem deploy: pedir keyframe (traz de volta uma
+tela parada), limpar desenhos, limpar o quadro, parar uma transmissão, derrubar
+uma conexão zumbi, copiar o convite da sala e fechar uma sala. Todos dizem
+quantos afetaram — "ok" tanto quando agiu quanto quando não achou nada é
+resposta que ensina a não confiar no botão.
 
 Para ligar, rode `npm run configurar` e responda a pergunta **"Seu ID do
 Discord"**, no passo 1. Um traço (`-`) desliga o painel de novo.
@@ -153,6 +175,70 @@ contadores globais de rede da máquina ficam indisponíveis.
 
 O nome de um servidor é resolvido com o Bot Token. Quando o bot não estiver
 naquele servidor, o painel mostra o Guild ID sem impedir as outras métricas.
+
+---
+
+## A página do servidor, para quem usa
+
+`https://seu-dominio.com/servidor` responde a pergunta que o painel não
+responde, porque não é dele: **tem gente aí?**
+
+Ela mostra as salas abertas, quem está dentro de cada uma, o que está no ar e
+por quanto tempo o servidor está de pé — e um botão **Entrar** que abre a sala
+no navegador, inteira: assistir, desenhar, apontar, mostrar a sua tela.
+
+As salas que nasceram dentro do Discord aparecem na lista, mas sem botão: quem
+manda nelas é a presença no canal de voz, e a página diz isso em vez de oferecer
+uma porta que não abre.
+
+### O link para colar no chat
+
+Todo cartão de sala tem um botão de **copiar convite**. Ele copia um endereço
+como `https://seu-dominio.com/convite/aB3xY9`, e é o que se manda para quem
+precisa ver a tela e não consegue entrar pela atividade — está no celular, está
+no navegador, está sem o aplicativo aberto.
+
+Quem recebe e já entrou uma vez cai direto na sala. Quem nunca entrou passa pelo
+login do Discord e **volta para aquela sala**, não para uma lista onde teria de
+procurá-la de novo. A senha da sala, se houver, continua sendo pedida.
+
+O mesmo botão existe no painel administrativo, dentro de cada sala.
+
+### Quem pode abrir
+
+Sempre é preciso entrar com o Discord: o que a página mostra são nomes e fotos
+de gente que está online agora, e isso é da turma do servidor, não do endereço
+inteiro da internet.
+
+Para limitar ao **seu** servidor do Discord, responda a pergunta do `npm run
+configurar` ou escreva à mão:
+
+```env
+DISCORD_GUILD_ID=123456789012345678
+```
+
+Com o modo de desenvolvedor ligado, o ID sai em **botão direito no ícone do
+servidor → Copiar ID do servidor**. Mais de um servidor? Separe por vírgula.
+
+Quem entrar com uma conta que não está lá recebe uma explicação, não um erro —
+e o resto do site continua aberto para essa pessoa. A checagem é feita no login,
+contra a resposta do próprio Discord, e vale as oito horas da sessão.
+
+Sem essa variável a página continua pedindo login, só não exige de qual servidor
+— e o servidor avisa isso em voz alta no arranque, porque a diferença entre "só
+a minha gente vê" e "qualquer conta do Discord vê" é grande demais para ficar
+implícita.
+
+Duas saídas, na variável `PUBLIC_STATUS`:
+
+```env
+PUBLIC_STATUS=off      # desliga a página e a rota juntas
+PUBLIC_STATUS=aberto   # dispensa o login (para testar na sua máquina)
+```
+
+O login pede duas coisas ao Discord: quem você é, e de quais servidores você
+participa. Nada é publicado em seu nome, e a página não mostra endereço, conta
+nem o conteúdo de tela nenhuma.
 
 ---
 

@@ -346,13 +346,13 @@ Agora quem assiste manda um boletim curto a cada cinco segundos para
 `POST /api/diag`, autenticado pelo mesmo token de sala que abre o WebSocket.
 `server/diagnostico.js` guarda o **último** de cada um e deriva o estado:
 
-| estado | o que quer dizer |
-| --- | --- |
-| `ok` | desenhando quadros, no tempo |
-| `atrasado` | a imagem anda, mas é velha — fila de decode funda ou lag alto |
-| `travado` | o contador de quadros não andou entre dois boletins |
-| `sem-imagem` | nunca desenhou nada: é o tile eterno em "Conectando…" |
-| `sem-decodificador` | o codec não subiu naquela máquina — a linha diz qual |
+| estado              | o que quer dizer                                              |
+| ------------------- | ------------------------------------------------------------- |
+| `ok`                | desenhando quadros, no tempo                                  |
+| `atrasado`          | a imagem anda, mas é velha — fila de decode funda ou lag alto |
+| `travado`           | o contador de quadros não andou entre dois boletins           |
+| `sem-imagem`        | nunca desenhou nada: é o tile eterno em "Conectando…"         |
+| `sem-decodificador` | o codec não subiu naquela máquina — a linha diz qual          |
 
 Duas decisões que valem a explicação: o **último** boletim, e não o histórico,
 porque o painel responde "como está agora"; e só as **mudanças** de estado
@@ -496,6 +496,64 @@ ela está entregando e o **teto de fila** que decide o descarte, com a fila de
 cada espectador ao lado. Espectador marcado como _afogado_ é uma tela parada com
 o servidor sabendo por quê.
 
+A forma da tela é a do Discord, e isso é decisão, não estética: sala é canal,
+quem está dentro é lista de membros, guild é ícone na barra da esquerda. Quem
+abre este painel passa o dia dentro do Discord, e uma gramática própria é uma
+gramática a aprender na noite em que alguma coisa quebrou. O filtro por guild
+recalcula gente, sala e banda a partir das salas que sobraram — só CPU, memória
+e disco continuam sendo da máquina, e a barra de cima diz isso, porque um número
+que não obedece ao filtro sem avisar é uma conclusão errada esperando acontecer.
+
+Três coisas existem só para encurtar investigação: o **json-cru**, que é a
+resposta de `/api/admin/metrics` colorida e filtrável — antes, a pergunta que a
+tela não respondia mandava abrir o DevTools num painel que já tinha o dado na
+mão; o **copiar/baixar** do JSON e do log, que é o que se manda para outra
+pessoa investigar junto (e vai sempre sem o filtro de guild, porque recorte
+invisível dentro de um anexo é pior do que anexo nenhum); e o **Ctrl+K**, porque
+teclar o nome da sala sempre foi mais rápido do que caçar a linha dela numa
+lista que se mexe sozinha.
+
+## A página do servidor
+
+`/servidor` responde outra pergunta, e ela é de quem usa: _tem gente aí?_ O
+lobby do site só mostra as salas da própria instância, e quem abre o endereço
+sozinho não tem como saber que o resto existe.
+
+O que separa esta página do painel não é a origem do número — os dois comem do
+mesmo `adminStats()`, de propósito, porque duas travessias das salas montando
+duas verdades é como as duas passam a discordar. O que separa é a **projeção**,
+que mora em `publico.js` e deixa de fora duas classes inteiras de coisa:
+
+1. **Número de diagnóstico.** Fila, descarte, ping, teto, memória: são o _como
+   está indo_, e quem só quer entrar numa sala não tem o que fazer com eles. O
+   teste dessa projeção é escrito ao contrário — ele procura os campos que não
+   podem estar lá.
+2. **Identificador que sirva de porta.** O id de uma sala é a chave de entrada
+   dela, e só acompanha as salas em que essa entrada existe: as do site. A sala
+   de uma call aparece na lista, mas sem id, porque o dela é derivado do id do
+   canal de voz. Cada linha leva no lugar uma chave opaca, salgada por processo,
+   que serve para a página saber que o cartão é o mesmo depois do refresh.
+
+A porta é o login do Discord, e a razão é o conteúdo: nome e foto de quem está
+online agora são da turma do servidor, não do endereço inteiro da internet. Com
+`DISCORD_GUILD_ID` preenchido, o login pede também o escopo `guilds` e a
+resposta do Discord decide quem passa — a checagem acontece uma vez, no login, e
+vale as oito horas do cookie. Consultar o Discord a cada leitura seria uma
+chamada externa a cada quatro segundos por aba aberta, e o preço disso é maior
+do que o de alguém continuar vendo a lista até a sessão vencer depois de sair do
+servidor.
+
+`/convite/:sala` é a mesma porta com um destino específico. Ele existe por um
+caso que não tinha resposta: alguém está mostrando a tela pela atividade, e a
+pessoa que precisa ver não consegue entrar por lá. Quem já entrou vai direto
+para a sala; quem não entrou passa pelo login e **volta para ela** — o destino
+viaja assinado dentro do `state` do OAuth, e só caminho deste site é aceito de
+volta, senão o parâmetro seria um redirect aberto com o nosso domínio na barra.
+
+`PUBLIC_STATUS=off` desliga a página e a rota juntas; `aberto` dispensa o login,
+que é o modo de quem está testando na própria máquina. A rota tem um segundo de
+cache compartilhado, porque ela é a única sem porteiro que varre todas as salas.
+
 ## Estrutura
 
 ```
@@ -504,8 +562,10 @@ server/
   rooms.js        salas e repasse dos quadros
   tokens.js       tokens assinados (sem biblioteca externa)
   eventos.js      anel de log que alimenta o painel (deriva o console)
+  publico.js      a projeção pública: o que /servidor pode mostrar, e o que não
   public/share.*  a aba de captura, que roda FORA do Discord
   public/admin.*  o painel: visão geral, salas, pessoas, diagnóstico, ajustes
+  public/servidor.* a página de estado para quem usa, com os links de convite
 client/
   src/main.js     interface da sala e conexão
   src/player.js   decodifica os quadros e desenha no canvas

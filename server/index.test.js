@@ -819,3 +819,36 @@ describe('/api/diag', () => {
     expect((await post('/api/diag', { token: s.viewerToken, telas })).status).toBe(204);
   });
 });
+
+/**
+ * A página de estado num servidor sem aplicação do Discord.
+ *
+ * É a configuração de quem só rodou `npm start`, e o que importa aqui é que ela
+ * não conta nada sem login — e que o botão de entrar não leve a um erro do
+ * Discord quando não existe aplicação para receber ninguém.
+ */
+describe('/api/publico', () => {
+  it('não conta nada sobre quem está online sem login', async () => {
+    const resposta = await get('/api/publico');
+
+    expect(resposta.status).toBe(401);
+    expect(await resposta.json()).toEqual({ ok: false, error: 'login_required' });
+  });
+
+  it('diz que não há como entrar, em vez de oferecer um botão morto', async () => {
+    const resposta = await get('/api/servidor/me');
+
+    expect(resposta.status).toBe(401);
+    expect(await resposta.json()).toMatchObject({
+      ligado: true,
+      error: 'login_required',
+      aplicacao: false,
+    });
+  });
+
+  it('o convite manda ao aviso, e não a um login que não existe', async () => {
+    const resposta = await get('/convite/abc123');
+
+    expect(resposta.headers.get('location')).toBe('/servidor?error=sem_aplicacao');
+  });
+});

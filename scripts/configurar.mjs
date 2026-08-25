@@ -191,6 +191,37 @@ if (DISCORD_ADMIN_ID && SESSION_SECRET.length < 32) {
   nota('  Quem estiver numa sala agora vai precisar entrar de novo.');
 }
 
+// A página /servidor mostra nome e foto de quem está online agora. Perguntar
+// aqui é o que separa "só a minha turma vê" de "qualquer conta do Discord vê",
+// e essa diferença não pode depender de alguém achar uma variável no README.
+linha();
+nota('  Opcional: a página do servidor. Ela mostra as salas abertas, quem está');
+nota('  em cada uma e o que está no ar — e dá o link de convite que você cola');
+nota('  no Discord para quem não consegue entrar pela atividade.');
+linha();
+nota('  Ela pede login do Discord sempre. Cole aqui o ID do SEU SERVIDOR para');
+nota('  que só quem está nele possa abrir: botão direito no ícone do servidor');
+nota('  → "Copiar ID do servidor". Enter pula (qualquer conta do Discord vê).');
+linha();
+
+const respostaGuild = await perguntar('ID do seu servidor do Discord (opcional)', {
+  padrao: atual.DISCORD_GUILD_ID,
+  valida: (v) => {
+    if (!v || v === '-') return null;
+    for (const id of idsDoPainel(v)) {
+      if (!/^[0-9]{15,21}$/.test(id)) {
+        return `"${id}" não parece um ID de servidor: são só números, uns 19.`;
+      }
+      if (id === DISCORD_CLIENT_ID) {
+        return 'Esse é o Client ID da aplicação, não o do servidor. Ninguém passaria da porta.';
+      }
+    }
+    return null;
+  },
+});
+
+const DISCORD_GUILD_ID = respostaGuild === '-' ? '' : idsDoPainel(respostaGuild).join(',');
+
 titulo('  Passo 2 de 3 · Endereço público');
 linha();
 nota('  O Discord precisa alcançar o programa que roda no seu computador,');
@@ -236,6 +267,7 @@ gravarEnv({
   DISCORD_CLIENT_SECRET,
   DISCORD_BOT_TOKEN,
   DISCORD_ADMIN_ID,
+  DISCORD_GUILD_ID,
   PUBLIC_ORIGIN: origem,
 });
 
@@ -278,6 +310,15 @@ if (DISCORD_ADMIN_ID) {
   nota('  Ele pede login pelo Discord e só abre para a conta que você informou.');
   linha();
 }
+
+linha(`  ${cor.forte}Página do servidor:${cor.fim}     ${cor.verde}${origem}/servidor${cor.fim}`);
+nota(
+  DISCORD_GUILD_ID
+    ? '  Abre para quem entrar com o Discord e estiver no seu servidor.'
+    : '  Abre para qualquer conta do Discord — informe o ID do servidor para limitar.',
+);
+nota('  É de lá que sai o link de convite para colar no chat.');
+linha();
 nota('  O endereço do túnel muda toda vez que você fecha o "npm run tunel".');
 nota('  Quando isso acontecer, o .env se atualiza sozinho — só o "Target" do');
 nota('  passo 1 precisa ser trocado no site do Discord.');

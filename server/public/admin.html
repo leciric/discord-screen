@@ -4,8 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="robots" content="noindex,nofollow" />
-    <title>Admin · Sala de Tela</title>
-    <link rel="stylesheet" href="/admin.css?v=7" />
+    <title>Painel · Sala de Tela</title>
+    <link rel="stylesheet" href="/admin.css?v=8" />
   </head>
   <body>
     <main id="loading" class="center">
@@ -17,106 +17,195 @@
 
     <main id="login" class="center" hidden>
       <div class="center-inner">
-        <div class="mark" aria-hidden="true">ST</div>
+        <div class="mark grande" aria-hidden="true">ST</div>
         <h1>Painel da Sala de Tela</h1>
         <p id="loginMessage" class="muted">Entre com a conta do Discord autorizada.</p>
         <a id="loginButton" class="btn btn-brand" href="/admin/auth/login">Entrar com Discord</a>
       </div>
     </main>
 
-    <div id="dashboard" hidden>
-      <header class="topbar">
-        <div class="mark" aria-hidden="true">ST</div>
-        <h1>Sala de Tela</h1>
-
-        <!-- O ponto verde é o único indicador de conexão. Quando o servidor
-             para de responder ele fica vermelho e o texto muda — não precisa
-             de um segundo aviso dizendo a mesma coisa. -->
-        <span id="live" class="badge on"><i></i> Ao vivo</span>
-
-        <div class="spacer"></div>
-
-        <!-- Um sinal só, no lugar mais visível: quando alguma coisa está
-             errada agora, ela aparece aqui em vez de esperar a pessoa achar a
-             aba certa. Some quando não há nada a dizer. -->
-        <button id="alertPill" class="pill-alert" hidden></button>
-
-        <span class="who">
-          <img id="adminAvatar" alt="" hidden />
-          <span id="adminName"></span>
-        </span>
-        <!-- SVG, e não o caractere ↻: ele depende de a fonte da máquina ter o
-             glifo, e onde não tem sai um quadrado ou outra letra. -->
-        <button
-          id="refresh"
-          class="btn btn-icon"
-          title="Atualizar agora"
-          aria-label="Atualizar agora"
-        >
-          <svg
-            viewBox="0 0 24 24"
-            aria-hidden="true"
-            width="15"
-            height="15"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.9"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <path d="M20.5 12a8.5 8.5 0 1 1-2.6-6.1" />
-            <path d="M20.5 4.5V10H15" />
-          </svg>
+    <!--
+      A tela é a do Discord de propósito, e não por gosto: quem administra isto
+      passa o dia dentro dele, e a barra de servidores, a lista de canais e a
+      lista de membros já significam alguma coisa antes de serem lidas. A sala
+      vira canal, quem está dentro vira membro, o servidor do Discord vira o
+      ícone da esquerda — e nada disso precisa de legenda.
+    -->
+    <div id="dashboard" class="app" hidden>
+      <!-- ------------------------------------------- barra de servidores -->
+      <nav class="rail" aria-label="Servidores do Discord">
+        <button id="railTudo" class="rail-item ativo" data-guild="" title="Tudo o que existe aqui">
+          <span class="rail-mark">ST</span>
+          <i class="rail-pino"></i>
         </button>
-        <button id="logout" class="btn">Sair</button>
-      </header>
+        <div class="rail-sep"></div>
+        <div id="railGuilds" class="rail-lista"></div>
+        <div class="rail-sep"></div>
+        <a
+          id="railPublica"
+          class="rail-item link"
+          href="/servidor"
+          target="_blank"
+          rel="noopener"
+          title="A página pública deste servidor"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M3 12h18M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18" />
+          </svg>
+        </a>
+      </nav>
 
-      <div class="layout">
-        <nav class="nav" aria-label="Seções">
-          <button class="nav-item ativo" data-aba="visao">
+      <!-- ------------------------------------------------ lista de canais -->
+      <div class="sidebar">
+        <header class="sidebar-head">
+          <span id="servidorNome">Sala de Tela</span>
+          <span id="servidorSub" class="sidebar-sub">—</span>
+        </header>
+
+        <div class="canais">
+          <p class="categoria">Painel</p>
+          <button class="canal ativo" data-aba="visao">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <rect x="3" y="3" width="7" height="9" rx="1.5" />
               <rect x="14" y="3" width="7" height="5" rx="1.5" />
               <rect x="14" y="12" width="7" height="9" rx="1.5" />
               <rect x="3" y="16" width="7" height="5" rx="1.5" />
             </svg>
-            <span>Visão geral</span>
+            <span>visão-geral</span>
           </button>
-          <button class="nav-item" data-aba="salas">
+          <button class="canal" data-aba="diagnostico">
             <svg viewBox="0 0 24 24" aria-hidden="true">
-              <rect x="2.5" y="4" width="19" height="13" rx="2" />
-              <path d="M8 21h8" />
+              <path d="M3 12h4l2.5-7 5 14L17 12h4" />
             </svg>
-            <span>Salas</span><em id="navSalas">0</em>
+            <span>diagnóstico</span>
+            <em id="navSinais" class="conta alerta" hidden>0</em>
           </button>
-          <button class="nav-item" data-aba="pessoas">
+          <button class="canal" data-aba="pessoas">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M17 20v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
               <circle cx="9" cy="7" r="4" />
               <path d="M23 20v-2a4 4 0 0 0-3-3.87" />
             </svg>
-            <span>Pessoas</span><em id="navPessoas">0</em>
+            <span>pessoas</span>
+            <em id="navPessoas" class="conta">0</em>
           </button>
-          <button class="nav-item" data-aba="diagnostico">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M3 12h4l2.5-7 5 14L17 12h4" />
-            </svg>
-            <span>Diagnóstico</span>
-          </button>
-          <button class="nav-item" data-aba="ajustes">
+          <button class="canal" data-aba="ajustes">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 7h10M18 7h2M4 17h2M10 17h10" />
               <circle cx="16" cy="7" r="2.4" />
               <circle cx="8" cy="17" r="2.4" />
             </svg>
-            <span>Ajustes</span>
+            <span>ajustes</span>
           </button>
-        </nav>
+          <button class="canal" data-aba="json">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M8 4H6a2 2 0 0 0-2 2v4l-2 2 2 2v4a2 2 0 0 0 2 2h2" />
+              <path d="M16 4h2a2 2 0 0 1 2 2v4l2 2-2 2v4a2 2 0 0 1-2 2h-2" />
+            </svg>
+            <span>json-cru</span>
+          </button>
 
-        <div class="shell">
+          <p class="categoria com-conta">
+            <span>Salas</span>
+            <em id="navSalas" class="conta">0</em>
+          </p>
+          <button class="canal" data-aba="salas">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="2.5" y="4" width="19" height="13" rx="2" />
+              <path d="M8 21h8" />
+            </svg>
+            <span>todas-as-salas</span>
+          </button>
+          <div id="canaisSalas" class="canais-salas"></div>
+          <p id="semSalas" class="sidebar-vazio">Nenhuma sala aberta.</p>
+        </div>
+
+        <!-- O painel de baixo é o do Discord: quem você é, se está conectado, e
+             os botões que não pertencem a canal nenhum. -->
+        <div class="usuario">
+          <div class="usuario-eu">
+            <span class="av-caixa">
+              <img id="adminAvatar" class="av" alt="" hidden />
+              <span id="adminIniciais" class="av">·</span>
+              <i id="adminPonto" class="ponto ok"></i>
+            </span>
+            <span class="usuario-texto">
+              <strong id="adminName">—</strong>
+              <span id="adminEstado" class="usuario-sub">ao vivo</span>
+            </span>
+          </div>
+          <button
+            id="btnAtualizar"
+            class="icone"
+            title="Atualizar agora (R)"
+            aria-label="Atualizar"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20.5 12a8.5 8.5 0 1 1-2.6-6.1" />
+              <path d="M20.5 4.5V10H15" />
+            </svg>
+          </button>
+          <button id="btnSair" class="icone" title="Sair do painel" aria-label="Sair">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+              <path d="M16 17l5-5-5-5M21 12H9" />
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- ------------------------------------------------------- conteúdo -->
+      <main class="conteudo">
+        <header class="barra">
+          <span id="barraIcone" class="barra-icone" aria-hidden="true">#</span>
+          <h1 id="barraTitulo">visão-geral</h1>
+          <span class="barra-tracinho" aria-hidden="true"></span>
+          <span id="barraSub" class="barra-sub"></span>
+
+          <button id="filtroChip" class="chip-filtro" hidden>
+            <span id="filtroNome"></span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+          </button>
+
+          <div class="spacer"></div>
+
+          <!-- Um sinal só, no lugar mais visível: quando alguma coisa está
+               errada agora, ela aparece aqui em vez de esperar a pessoa achar
+               o canal certo. Some quando não há nada a dizer. -->
+          <button id="alertPill" class="pill-alert" hidden></button>
+
+          <button id="btnBusca" class="icone" title="Ir para… (Ctrl+K)" aria-label="Ir para">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="11" cy="11" r="7" />
+              <path d="M20 20l-3.5-3.5" />
+            </svg>
+          </button>
+          <button id="btnCopiar" class="icone" title="Copiar o JSON deste instante">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="9" y="9" width="11" height="11" rx="2" />
+              <path d="M5 15V5a2 2 0 0 1 2-2h10" />
+            </svg>
+          </button>
+          <button id="btnBaixar" class="icone" title="Baixar o JSON deste instante">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 3v12M7 11l5 5 5-5" />
+              <path d="M4 20h16" />
+            </svg>
+          </button>
+          <button id="btnMembros" class="icone" title="Mostrar ou esconder quem está online">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M17 20v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+              <circle cx="9" cy="7" r="4" />
+              <path d="M23 20v-2a4 4 0 0 0-3-3.87" />
+            </svg>
+          </button>
+        </header>
+
+        <div class="rolagem">
           <div id="errorBanner" class="banner" hidden></div>
 
-          <!-- ------------------------------------------------ visão geral -->
+          <!-- ---------------------------------------------- visão geral -->
           <section id="aba-visao" class="aba">
             <div class="stats">
               <article class="card stat">
@@ -206,13 +295,18 @@
             </div>
           </section>
 
-          <!-- ------------------------------------------------------ salas -->
+          <!-- --------------------------------------------------- salas -->
           <section id="aba-salas" class="aba" hidden>
             <p id="salasEmpty" class="empty">Nenhuma sala aberta.</p>
             <div id="salasLista" class="salas"></div>
           </section>
 
-          <!-- ---------------------------------------------------- pessoas -->
+          <!-- Uma sala só, aberta pelo canal da esquerda. -->
+          <section id="aba-sala" class="aba" hidden>
+            <div id="salaDetalhe"></div>
+          </section>
+
+          <!-- ------------------------------------------------- pessoas -->
           <section id="aba-pessoas" class="aba" hidden>
             <section class="card panel">
               <div class="panel-head">
@@ -243,7 +337,7 @@
             </section>
           </section>
 
-          <!-- ------------------------------------------------ diagnóstico -->
+          <!-- --------------------------------------------- diagnóstico -->
           <section id="aba-diagnostico" class="aba" hidden>
             <section class="card panel">
               <div class="panel-head">
@@ -270,8 +364,7 @@
               </div>
 
               <p id="clientesEmpty" class="empty">
-                Ninguém assistindo agora — ou ninguém com uma versão que mande o
-                boletim.
+                Ninguém assistindo agora — ou ninguém com uma versão que mande o boletim.
               </p>
 
               <div id="clientesScroll" class="table-scroll" hidden>
@@ -298,7 +391,15 @@
             <section class="card panel">
               <div class="panel-head">
                 <h2>Log do servidor</h2>
+                <span id="logPerdidos" class="badge warn" hidden></span>
                 <div class="spacer"></div>
+                <input
+                  id="logBusca"
+                  class="input-sm busca"
+                  type="search"
+                  placeholder="Procurar no log…"
+                  aria-label="Procurar no log"
+                />
                 <select id="logNivel" class="select" aria-label="Filtrar por nível">
                   <option value="">Todos os níveis</option>
                   <option value="info">Info</option>
@@ -309,10 +410,12 @@
                   <option value="">Toda origem</option>
                   <option value="sala">Sala</option>
                   <option value="transmissao">Transmissão</option>
+                  <option value="cliente">Cliente</option>
                   <option value="painel">Painel</option>
                   <option value="sistema">Sistema</option>
                 </select>
                 <button id="logPausa" class="btn btn-sm">Pausar</button>
+                <button id="logBaixa" class="btn btn-sm">Baixar</button>
                 <button id="logLimpa" class="btn btn-sm">Limpar</button>
               </div>
               <div id="logBox" class="log" role="log" aria-live="polite"></div>
@@ -320,7 +423,7 @@
             </section>
           </section>
 
-          <!-- ---------------------------------------------------- ajustes -->
+          <!-- ------------------------------------------------- ajustes -->
           <section id="aba-ajustes" class="aba" hidden>
             <section class="card panel">
               <div class="panel-head">
@@ -333,7 +436,7 @@
               <p class="note">
                 Quando uma sala começa a travar, o intervalo entre descobrir qual número está errado
                 e poder testar outro costuma custar um deploy inteiro — e o problema passa antes.
-                Daqui você muda e observa na aba de Salas no mesmo minuto.
+                Daqui você muda e observa no canal da sala no mesmo minuto.
               </p>
               <div id="ajustesForm" class="ajustes"></div>
               <div class="acoes-fim">
@@ -342,8 +445,45 @@
               </div>
             </section>
           </section>
+
+          <!-- ------------------------------------------------ json cru -->
+          <!--
+            A resposta inteira, como ela chegou. Existe para as perguntas que a
+            tela ainda não responde: quando alguém precisa de um campo que
+            nenhum cartão mostra, o caminho era abrir o DevTools num painel que
+            já tinha os dados na mão.
+          -->
+          <section id="aba-json" class="aba" hidden>
+            <section class="card panel">
+              <div class="panel-head">
+                <h2>A resposta crua</h2>
+                <div class="spacer"></div>
+                <input
+                  id="jsonBusca"
+                  class="input-sm busca"
+                  type="search"
+                  placeholder="Filtrar linhas…"
+                  aria-label="Filtrar o JSON"
+                />
+                <button id="jsonCopiar" class="btn btn-sm">Copiar</button>
+                <button id="jsonBaixar" class="btn btn-sm">Baixar</button>
+              </div>
+              <p class="note">
+                É o corpo de <code>/api/admin/metrics</code> deste instante, com o filtro aplicado
+                por linha. Congela enquanto você digita no filtro — senão a linha que você achou sai
+                do lugar antes de você terminar de ler.
+              </p>
+              <pre id="jsonBox" class="json"></pre>
+            </section>
+          </section>
         </div>
-      </div>
+      </main>
+
+      <!-- ------------------------------------------------ quem está online -->
+      <aside id="membros" class="membros" aria-label="Quem está online">
+        <div id="membrosLista"></div>
+        <p id="membrosVazio" class="sidebar-vazio">Ninguém conectado.</p>
+      </aside>
     </div>
 
     <div id="toasts" class="toasts" aria-live="polite"></div>
@@ -361,6 +501,40 @@
       </div>
     </div>
 
-    <script src="/admin.js?v=7"></script>
+    <!-- O "ir para" do Discord, com o mesmo atalho. Numa noite ruim a sala que
+         se procura está na posição catorze de uma lista que não para de mexer. -->
+    <div id="switcher" class="modal topo" hidden>
+      <div class="switcher-box">
+        <input
+          id="switcherInput"
+          class="switcher-input"
+          type="text"
+          placeholder="Ir para uma sala, uma pessoa ou um canal…"
+          autocomplete="off"
+          aria-label="Ir para"
+        />
+        <div id="switcherLista" class="switcher-lista"></div>
+      </div>
+    </div>
+
+    <!-- O cartão de perfil, igual ao do Discord: clicar num nome abre o que se
+         sabe daquela pessoa, e o que dá para fazer com ela. -->
+    <div id="perfil" class="modal" hidden>
+      <div class="perfil-box">
+        <div class="perfil-capa"></div>
+        <div class="perfil-corpo">
+          <span class="av-caixa perfil-av">
+            <img id="perfilAvatar" class="av" alt="" hidden />
+            <span id="perfilIniciais" class="av">·</span>
+          </span>
+          <h2 id="perfilNome">—</h2>
+          <p id="perfilTag" class="muted"></p>
+          <dl id="perfilInfo" class="dl"></dl>
+          <div id="perfilAcoes" class="acoes"></div>
+        </div>
+      </div>
+    </div>
+
+    <script src="/admin.js?v=8"></script>
   </body>
 </html>

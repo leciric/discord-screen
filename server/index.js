@@ -24,6 +24,7 @@ const {
   DISCORD_CLIENT_SECRET,
   DISCORD_BOT_TOKEN,
   DISCORD_ADMIN_ID = '',
+  DISCORD_GUILD_ID = '',
   TURN_URL = '',
   TURN_USER = '',
   TURN_PASS = '',
@@ -59,6 +60,26 @@ const ADMIN_IDS = new Set(
 );
 const TEM_ADMIN = ADMIN_IDS.size > 0;
 const ADMIN_COOKIE = 'discord_screen_admin';
+
+/**
+ * Quem pode ver a página pública de estado.
+ *
+ * Ela mostra nome e foto de quem está online agora, e isso não é para o
+ * endereço inteiro da internet: quem abre precisa ter entrado com a conta do
+ * Discord e estar num destes servidores. A checagem é feita uma vez, no login,
+ * contra o que o próprio Discord responde — o navegador não manda id de guild
+ * nenhum, e não haveria como acreditar nele se mandasse.
+ *
+ * Vazio significa que a exigência de servidor não existe: basta ter entrado com
+ * uma conta do Discord. O aviso no arranque diz isso em voz alta, porque é a
+ * diferença entre "só a minha gente vê" e "qualquer pessoa com uma conta vê".
+ */
+const GUILDS_DO_STATUS = new Set(
+  String(DISCORD_GUILD_ID)
+    .split(/[\s,;]+/)
+    .filter(Boolean),
+);
+const STATUS_COOKIE = 'discord_screen_status';
 
 // Falha no arranque, não no primeiro pedido: subir sem segredo significa
 // assinar todos os tokens com o padrão público, e um servidor assim de pé é
@@ -712,12 +733,12 @@ app.post('/api/rooms/password', (req, res) => {
 const WEB_INSTANCE = 'web';
 const REDIRECT_URI = `${PUBLIC_ORIGIN}/auth/callback`;
 
-function discordAuthorizeUrl(state = null) {
+function discordAuthorizeUrl(state = null, scope = 'identify') {
   const url = new URL('https://discord.com/oauth2/authorize');
   url.searchParams.set('client_id', DISCORD_CLIENT_ID);
   url.searchParams.set('redirect_uri', REDIRECT_URI);
   url.searchParams.set('response_type', 'code');
-  url.searchParams.set('scope', 'identify');
+  url.searchParams.set('scope', scope);
   if (state) url.searchParams.set('state', state);
   return url;
 }
@@ -740,11 +761,69 @@ app.get('/admin/auth/login', (_req, res) => {
   res.redirect(discordAuthorizeUrl(state).toString());
 });
 
+/**
+ * Login da página de estado.
+ *
+ * Pede `guilds` além de `identify`, e é o escopo que faz a checagem existir: é
+ * com ele que o Discord conta de quais servidores a conta participa. Nada mais
+ * vem junto — nem mensagens, nem e-mail, nem entrar em servidor nenhum.
+ */
+/**
+ * Para onde voltar depois do login, quando o link pedia um lugar específico.
+ *
+ * Só caminho deste site, e a checagem é literal: `//outro.site` é URL absoluta
+ * para o navegador, e sem a segunda condição este parâmetro seria um redirect
+ * aberto — o tipo de coisa que aparece em link de phishing porque o domínio da
+ * barra é o seu de verdade até o último salto.
+ */
+function destinoSeguro(valor) {
+  const alvo = typeof valor === 'string' ? valor : '';
+  return alvo.startsWith('/') && !alvo.startsWith('//') ? alvo : null;
+}
+
+app.get('/servidor/auth/login', (req, res) => {
+  if (!MOSTRAR_STATUS) return res.redirect('/servidor?error=desligado');
+  if (!DISCORD_CLIENT_ID || !DISCORD_CLIENT_SECRET) {
+    return res.redirect('/servidor?error=sem_aplicacao');
+  }
+
+  const state = signToken(
+    {
+      scope: 'oauth-state',
+      target: 'servidor',
+      voltar: destinoSeguro(req.query.voltar),
+      nonce: crypto.randomBytes(12).toString('base64url'),
+    },
+    10 * 60,
+  );
+  // Sem a exigência de servidor, o escopo extra não teria a quem servir — e
+  // pedir permissão que não vai ser usada é como se ensina a clicar em "sim"
+  // sem ler.
+  const escopo = GUILDS_DO_STATUS.size ? 'identify guilds' : 'identify';
+  res.redirect(discordAuthorizeUrl(state, escopo).toString());
+});
+
+/** De quais servidores esta conta participa, na palavra do Discord. */
+async function guildsDaConta(accessToken) {
+  const lista = await fetch('https://discord.com/api/users/@me/guilds', {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(PRAZO_DISCORD_MS),
+  }).then((r) => r.json());
+  return Array.isArray(lista) ? lista : [];
+}
+
 app.get('/auth/callback', async (req, res) => {
   const { code, state } = req.query;
   const oauthState = verifyToken(typeof state === 'string' ? state : '');
   const adminFlow = oauthState?.scope === 'oauth-state' && oauthState.target === 'admin';
-  if (!code) return res.redirect(adminFlow ? '/admin?error=sem_codigo' : '/?erro=sem_codigo');
+  const statusFlow = oauthState?.scope === 'oauth-state' && oauthState.target === 'servidor';
+  const erroPara = (motivo) =>
+    adminFlow
+      ? `/admin?error=${motivo}`
+      : statusFlow
+        ? `/servidor?error=${motivo}`
+        : `/?erro=${motivo}`;
+  if (!code) return res.redirect(erroPara('sem_codigo'));
 
   try {
     const token = await fetch('https://discord.com/api/oauth2/token', {
@@ -760,18 +839,14 @@ app.get('/auth/callback', async (req, res) => {
       signal: AbortSignal.timeout(PRAZO_DISCORD_MS),
     }).then((r) => r.json());
 
-    if (!token.access_token) {
-      return res.redirect(adminFlow ? '/admin?error=troca_falhou' : '/?erro=troca_falhou');
-    }
+    if (!token.access_token) return res.redirect(erroPara('troca_falhou'));
 
     const me = await fetch('https://discord.com/api/users/@me', {
       headers: { Authorization: `Bearer ${token.access_token}` },
       signal: AbortSignal.timeout(PRAZO_DISCORD_MS),
     }).then((r) => r.json());
 
-    if (!me?.id) {
-      return res.redirect(adminFlow ? '/admin?error=perfil_falhou' : '/?erro=perfil_falhou');
-    }
+    if (!me?.id) return res.redirect(erroPara('perfil_falhou'));
 
     if (adminFlow) {
       if (!ADMIN_IDS.has(me.id)) return res.redirect('/admin?error=forbidden');
@@ -793,6 +868,56 @@ app.get('/auth/callback', async (req, res) => {
       return res.redirect('/admin');
     }
 
+    /**
+     * O login da página de estado, com a porta que ela tem.
+     *
+     * A pergunta "esta conta está no nosso servidor?" é respondida pelo
+     * Discord, com o token que acabou de ser emitido — e a resposta vira um
+     * cookie assinado aqui. Nada disso passa pelo navegador em texto: quem
+     * trocar o cookie não passa pela verificação da assinatura, e quem trocar a
+     * lista de guilds no caminho estaria trocando a resposta do Discord.
+     *
+     * A checagem acontece uma vez, no login, e vale as oito horas do cookie.
+     * Quem sair do servidor no meio disso continua vendo até a sessão expirar,
+     * e isso é uma escolha: consultar o Discord a cada leitura desta página
+     * seria uma chamada externa a cada quatro segundos por aba aberta.
+     */
+    if (statusFlow) {
+      if (!MOSTRAR_STATUS) return res.redirect('/servidor?error=desligado');
+
+      let entrada = { id: null, nome: null };
+      if (GUILDS_DO_STATUS.size) {
+        const guilds = await guildsDaConta(token.access_token);
+        const achada = guilds.find((g) => GUILDS_DO_STATUS.has(String(g?.id)));
+        if (!achada) return res.redirect('/servidor?error=fora');
+        entrada = { id: String(achada.id), nome: achada.name ?? null };
+      }
+
+      const sessao = signToken(
+        {
+          scope: 'status',
+          uid: me.id,
+          name: me.global_name || me.username,
+          av: me.avatar ?? null,
+          guild: entrada.id,
+          guildName: entrada.nome,
+        },
+        8 * 60 * 60,
+      );
+      const secure = PUBLIC_ORIGIN.startsWith('https://') ? '; Secure' : '';
+      res.setHeader(
+        'Set-Cookie',
+        `${STATUS_COOKIE}=${sessao}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${8 * 60 * 60}${secure}`,
+      );
+      console.log(
+        `[status] ${me.global_name || me.username} entrou${entrada.nome ? ` por ${entrada.nome}` : ''}`,
+      );
+      // Quem chegou por um convite de sala volta para a sala, não para a lista:
+      // o link prometia uma tela específica, e o login é um pedágio no meio do
+      // caminho — não o destino.
+      return res.redirect(destinoSeguro(oauthState.voltar) ?? '/servidor');
+    }
+
     const identity = issueIdentity(
       WEB_INSTANCE,
       me.id,
@@ -805,7 +930,7 @@ app.get('/auth/callback', async (req, res) => {
     res.redirect(`/#identity=${encodeURIComponent(identity.identity)}`);
   } catch (err) {
     console.error('[auth] erro:', err);
-    res.redirect(adminFlow ? '/admin?error=interno' : '/?erro=interno');
+    res.redirect(erroPara('interno'));
   }
 });
 
@@ -1124,31 +1249,138 @@ app.get('/api/config', (_req, res) => {
  * O que está acontecendo no servidor, para quem não tem login de dono.
  *
  * A página `/servidor` come daqui. Vale dizer por que ela existe ao lado de um
- * painel que já mostra tudo isso: o painel pede a conta certa e responde "o que
- * está quebrado"; esta rota é aberta e responde "tem gente aí?". A segunda
- * pergunta é de quem chega no site, e antes dela a única resposta que existia
- * era o lobby do próprio canal — que, para quem abre o endereço sozinho, é uma
- * lista vazia e nenhuma pista de que o resto do servidor existe.
+ * painel que já mostra tudo isso: o painel é do dono da máquina e responde "o
+ * que está quebrado"; esta rota é de quem usa e responde "tem gente aí?". A
+ * segunda pergunta é de quem chega no site, e antes dela a única resposta que
+ * existia era o lobby do próprio canal — que, para quem abre o endereço
+ * sozinho, é uma lista vazia e nenhuma pista de que o resto existe.
  *
- * `PUBLIC_STATUS=off` desliga a rota e a página juntas, para quem hospeda e não
- * quer os nomes de quem está online visíveis sem login.
+ * Ela pede login mesmo assim, e por um motivo concreto: o que sai daqui são
+ * nomes e fotos de gente que está online agora. Isso é para a turma do
+ * servidor, não para o endereço inteiro da internet. Quem entra prova duas
+ * coisas com o próprio Discord — que tem conta, e que está num dos servidores
+ * de `DISCORD_GUILD_ID`.
+ *
+ * `PUBLIC_STATUS`: `off` desliga a página e a rota juntas; `aberto` dispensa o
+ * login, que é o modo de quem está testando na própria máquina; qualquer outra
+ * coisa (o padrão) exige o login acima.
  */
-const MOSTRAR_STATUS = !/^(off|0|false|nao|não)$/i.test(String(PUBLIC_STATUS).trim());
+const MODO_STATUS = String(PUBLIC_STATUS).trim().toLowerCase();
+const MOSTRAR_STATUS = !/^(off|0|false|nao|não)$/.test(MODO_STATUS);
+const STATUS_ABERTO = /^(aberto|open|publico|público)$/.test(MODO_STATUS);
+
+if (MOSTRAR_STATUS && !STATUS_ABERTO && !GUILDS_DO_STATUS.size) {
+  // Não é erro: sem DISCORD_GUILD_ID a página continua exigindo conta do
+  // Discord, só não exige QUAL conta. A diferença é grande demais para ficar
+  // implícita em quem esqueceu de preencher uma variável.
+  console.warn(
+    'aviso: /servidor aberto a qualquer conta do Discord — defina DISCORD_GUILD_ID para limitar ao seu servidor.',
+  );
+}
+
+/**
+ * Quem está autorizado a ver a página de estado.
+ *
+ * O cookie do painel vale aqui também: quem administra a máquina já provou
+ * mais do que esta página pede, e mandá-lo fazer um segundo login para ver
+ * menos informação seria só uma porta a mais na frente da mesma sala.
+ */
+function quemVeOStatus(req) {
+  const sessao = verifyToken(cookieOf(req, STATUS_COOKIE));
+  if (sessao?.scope === 'status') return sessao;
+
+  const admin = adminOf(req);
+  return admin ? { ...admin, guildName: null } : null;
+}
+
+app.get('/api/servidor/me', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  if (!MOSTRAR_STATUS) return res.status(503).json({ ligado: false, error: 'desligado' });
+
+  const quem = quemVeOStatus(req);
+  if (!quem && !STATUS_ABERTO) {
+    return res.status(401).json({
+      ligado: true,
+      aberto: false,
+      error: 'login_required',
+      // A página precisa saber se o botão de entrar tem para onde levar: sem
+      // aplicação do Discord configurada, ele levaria a um erro do Discord.
+      aplicacao: Boolean(DISCORD_CLIENT_ID && DISCORD_CLIENT_SECRET),
+      exigeServidor: GUILDS_DO_STATUS.size > 0,
+    });
+  }
+
+  res.json({
+    ligado: true,
+    aberto: STATUS_ABERTO,
+    user: quem ? { id: quem.uid, name: quem.name, avatar: quem.av ?? null } : null,
+    servidor: quem?.guildName ?? null,
+  });
+});
+
+app.post('/api/servidor/logout', (_req, res) => {
+  const secure = PUBLIC_ORIGIN.startsWith('https://') ? '; Secure' : '';
+  res.setHeader(
+    'Set-Cookie',
+    `${STATUS_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`,
+  );
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ ok: true });
+});
 
 /**
  * Um segundo de cache, compartilhado por todo mundo que pedir.
  *
- * Diferente do painel, esta rota não tem porteiro: o custo dela é o de varrer
- * todas as salas, e sem cache basta uma aba em laço para transformar uma página
- * de status em carga. Um segundo é curto o bastante para a página continuar
- * parecendo ao vivo — ela pede a cada quatro — e longo o bastante para o custo
- * não depender de quantas abas estão abertas.
+ * O custo desta rota é o de varrer todas as salas, e ela é pedida a cada quatro
+ * segundos por aba aberta. Um segundo é curto o bastante para a página
+ * continuar parecendo ao vivo e longo o bastante para o custo não depender de
+ * quantas abas existem.
  */
 let cachePublico = { em: 0, corpo: null };
 
-app.get('/api/publico', (_req, res) => {
+/**
+ * O convite: um link para colar no Discord.
+ *
+ * O caso é o de sempre e não tinha resposta: alguém está mostrando a tela pela
+ * atividade, e a pessoa que precisa ver não consegue entrar por lá — está no
+ * celular, está no navegador, está sem o aplicativo. Mandar "abre o site e
+ * procura a sala" não funciona, e o endereço da sala com o id colado à mão é
+ * uma linha que ninguém digita direito.
+ *
+ * Então o link é este, e ele leva ao lugar certo em qualquer um dos casos:
+ * quem já entrou vai direto para a sala; quem nunca entrou passa pelo login do
+ * Discord e volta para ela — sem cair numa lista para procurar de novo.
+ *
+ * Ele não afrouxa nada: a sala continua pedindo senha se tiver, e a porta de
+ * quem pode ver é a mesma da página de estado.
+ */
+app.get('/convite/:sala', (req, res) => {
+  const sala = String(req.params.sala ?? '');
+  // O id vai virar destino de redirecionamento; qualquer coisa fora deste
+  // alfabeto não é sala nossa e não tem por que continuar.
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(sala)) return res.status(400).end();
+
+  const destino = `/?sala=${encodeURIComponent(sala)}`;
+  res.setHeader('Cache-Control', 'no-store');
+
+  // Com a página de estado desligada, o convite vira o que ele sempre foi por
+  // baixo: um link para a sala. Não é hora de inventar uma porta que o resto do
+  // site não tem.
+  if (!MOSTRAR_STATUS || STATUS_ABERTO || quemVeOStatus(req)) return res.redirect(destino);
+
+  if (!DISCORD_CLIENT_ID || !DISCORD_CLIENT_SECRET) {
+    return res.redirect('/servidor?error=sem_aplicacao');
+  }
+
+  res.redirect(`/servidor/auth/login?voltar=${encodeURIComponent(destino)}`);
+});
+
+app.get('/api/publico', (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   if (!MOSTRAR_STATUS) return res.status(404).json({ ok: false, error: 'desligado' });
+  if (!STATUS_ABERTO && !quemVeOStatus(req)) {
+    return res.status(401).json({ ok: false, error: 'login_required' });
+  }
 
   const agora = Date.now();
   if (!cachePublico.corpo || agora - cachePublico.em >= 1000) {
@@ -1532,6 +1764,20 @@ server.listen(PORT, () => {
     if (PUBLIC_ORIGIN !== local) console.log(`  Painel publico: ${PUBLIC_ORIGIN}/admin`);
   } else {
     console.log('  Painel administrativo: desligado (defina DISCORD_ADMIN_ID no .env).');
+  }
+
+  // A página de estado é a única coisa aqui com três estados possíveis, e
+  // "aberta" é diferente demais de "com login" para quem sobe o servidor
+  // descobrir clicando.
+  if (MOSTRAR_STATUS) {
+    const porta = STATUS_ABERTO
+      ? 'sem login'
+      : GUILDS_DO_STATUS.size
+        ? 'login do Discord + servidor autorizado'
+        : 'login do Discord';
+    console.log(`  Página do servidor: ${local}/servidor (${porta})`);
+  } else {
+    console.log('  Página do servidor: desligada (PUBLIC_STATUS=off).');
   }
 
   // Erro fácil de cometer e difícil de diagnosticar: com PUBLIC_ORIGIN

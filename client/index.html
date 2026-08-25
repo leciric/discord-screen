@@ -45,6 +45,24 @@
           </div>
           <div class="lobby-actions">
             <button id="lobbyUser" class="user-chip" title="Seu perfil" hidden></button>
+            <!-- A lista daqui é só deste canal. A página do servidor mostra o
+                 que está acontecendo em todos eles, e é o link que se manda
+                 para quem não consegue entrar pelo Discord. Fica fora do
+                 iframe da atividade: ela abre em aba própria. -->
+            <a
+              id="serverLink"
+              class="btn"
+              href="/servidor"
+              target="_blank"
+              rel="noopener"
+              title="Ver tudo o que está acontecendo no servidor"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="9" />
+                <path d="M3 12h18M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18" />
+              </svg>
+              <span>O servidor agora</span>
+            </a>
             <button id="loginBtn" class="btn" hidden>Entrar com Discord</button>
             <button id="newRoom" class="btn go">Criar sala</button>
           </div>
@@ -127,7 +145,9 @@
             está dando conta" — e que aponta o relógio da origem quando o
             número de ressincronizações sobe sozinho.
           -->
-          <div class="panel-row"><span>Filas (exibir · decodificar)</span><strong id="pFilas">—</strong></div>
+          <div class="panel-row">
+            <span>Filas (exibir · decodificar)</span><strong id="pFilas">—</strong>
+          </div>
           <div class="panel-row"><span>Ressincronizações</span><strong id="pResync">—</strong></div>
           <div class="panel-row"><span>Largados</span><strong id="pLargados">—</strong></div>
           <div class="panel-row"><span>Som</span><strong id="pSom">—</strong></div>

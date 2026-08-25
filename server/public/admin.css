@@ -1,9 +1,15 @@
 /**
  * Painel administrativo.
  *
+ * A tela é a do Discord, e isso não é enfeite: quem administra isto passa o dia
+ * dentro dele. A barra de servidores, a coluna de canais e a lista de membros
+ * já querem dizer alguma coisa antes de serem lidas — sala é canal, quem está
+ * dentro é membro, guild é o ícone da esquerda. O painel anterior tinha as
+ * mesmas informações e uma gramática própria, que cada pessoa tinha de aprender.
+ *
  * O arquivo tem três partes, nesta ordem: os tokens, os primitivos e as peças
  * da tela. Para mudar a aparência inteira, mexa só nos tokens — nada abaixo
- * deles usa cor ou medida escrita na mão.
+ * deles usa cor escrita na mão.
  */
 
 /* ------------------------------------------------------------------ tokens */
@@ -13,32 +19,45 @@
      rolagem e os controles nativos nascem escuros também. */
   color-scheme: dark;
 
-  --bg: #0a0a0a;
-  --card: #131313;
-  --card-hover: #181818;
-  --border: #242424;
-  --border-strong: #303030;
+  /* Os três fundos do Discord escuro, na ordem em que ele os empilha. */
+  --rail: #1e1f22;
+  --sidebar: #2b2d31;
+  --main: #313338;
 
-  --fg: #fafafa;
-  --muted: #8b8b91;
-  --dim: #5e5e66;
+  --card: #2b2d31;
+  --card-2: #232428;
+  --elevado: #383a40;
+  --hover: #35373c;
+  --ativo: #404249;
+  --entrada: #1e1f22;
+
+  --border: #3f4147;
+  --border-forte: #4e5058;
+
+  --fg: #f2f3f5;
+  --meio: #b5bac1;
+  --muted: #949ba4;
+  --dim: #80848e;
 
   --brand: #5865f2;
-  --ok: #35c46b;
-  --warn: #e2a13c;
-  --danger: #e5484d;
+  --brand-hover: #4752c4;
+  --ok: #23a55a;
+  --warn: #f0b232;
+  --danger: #f23f43;
 
-  --radius: 14px;
-  --radius-sm: 9px;
+  --radius: 8px;
+  --radius-sm: 4px;
   --radius-pill: 999px;
 
-  --gap: 14px;
-  --pad: 20px;
+  --gap: 16px;
+  --pad: 18px;
 
-  --shell: 1240px;
-
-  --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, monospace;
+  /* gg sans é a do Discord; nas máquinas que não a têm, a pilha do sistema cai
+     no mesmo desenho de grotesca. */
+  --font:
+    'gg sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue',
+    sans-serif;
+  --mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
 }
 
 /* -------------------------------------------------------------- primitivos */
@@ -63,12 +82,13 @@
 
 body {
   margin: 0;
-  background: var(--bg);
+  background: var(--main);
   color: var(--fg);
   font-family: var(--font);
   font-size: 14px;
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
+  overflow: hidden;
 }
 
 h1,
@@ -76,7 +96,8 @@ h2,
 h3,
 p,
 dl,
-dd {
+dd,
+pre {
   margin: 0;
 }
 
@@ -87,87 +108,153 @@ button {
 }
 
 :focus-visible {
-  outline: 2px solid var(--brand);
+  outline: 2px solid #00a8fc;
   outline-offset: 2px;
   border-radius: var(--radius-sm);
 }
 
-.card {
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+/* A barra de rolagem do Discord: fina, escura, sem seta. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--rail) transparent;
 }
 
-/* O rótulo pequeno acima de cada número. Sem caixa alta: as duas telas de
-   referência usam frase normal, e caixa alta em rótulo curto só endurece a
-   leitura sem ganhar hierarquia. */
-.label {
-  color: var(--muted);
-  font-size: 13px;
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--rail);
+  border-radius: 4px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.spacer {
+  flex: 1;
 }
 
 .muted {
   color: var(--muted);
 }
 
+.card {
+  background: var(--card);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+}
+
+.label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
 .btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 7px;
-  height: 34px;
-  padding: 0 13px;
-  border: 1px solid var(--border);
+  height: 32px;
+  padding: 0 14px;
+  border: none;
   border-radius: var(--radius-sm);
-  background: var(--card);
+  background: var(--elevado);
   color: var(--fg);
   font-size: 13px;
+  font-weight: 500;
   transition:
     background 0.15s,
-    border-color 0.15s;
+    opacity 0.15s;
 }
 
 .btn:hover {
-  background: var(--card-hover);
-  border-color: var(--border-strong);
+  background: #4e5058;
 }
 
-.btn-icon {
-  width: 34px;
-  padding: 0;
-  justify-content: center;
+.btn[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-sm {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12.5px;
 }
 
 .btn-brand {
-  height: 40px;
-  padding: 0 18px;
-  border-color: transparent;
   background: var(--brand);
   color: #fff;
-  font-weight: 500;
-  text-decoration: none;
 }
 
 .btn-brand:hover {
-  background: #4a56e0;
-  border-color: transparent;
+  background: var(--brand-hover);
+}
+
+.btn-danger {
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--danger) 55%, transparent);
+  color: #ff9c9e;
+}
+
+.btn-danger:hover {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+
+/* Os botões de ícone da barra e do rodapé da coluna. */
+.icone {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--meio);
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.icone:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.icone.ligado {
+  background: var(--brand);
+  color: #fff;
+}
+
+.icone svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .badge {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 2px 9px;
-  border: 1px solid var(--border);
+  padding: 2px 8px;
   border-radius: var(--radius-pill);
-  color: var(--muted);
-  font-size: 12px;
+  background: var(--card-2);
+  color: var(--meio);
+  font-size: 11.5px;
+  font-weight: 500;
   white-space: nowrap;
-}
-
-.badge.on {
-  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
-  background: color-mix(in srgb, var(--ok) 12%, transparent);
-  color: var(--ok);
 }
 
 .badge i {
@@ -175,6 +262,74 @@ button {
   height: 6px;
   border-radius: 50%;
   background: currentColor;
+}
+
+.badge.on {
+  background: color-mix(in srgb, var(--ok) 16%, transparent);
+  color: #4ac57f;
+}
+
+.badge.warn {
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  color: var(--warn);
+}
+
+.badge.bad {
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+  color: #ff9c9e;
+}
+
+.hint {
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.note {
+  margin-bottom: 14px;
+  color: var(--meio);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.empty {
+  padding: 22px;
+  color: var(--dim);
+  text-align: center;
+  font-size: 13px;
+}
+
+.select {
+  height: 28px;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--entrada);
+  color: var(--meio);
+  font-size: 12.5px;
+}
+
+.input-sm {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--entrada);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+}
+
+.input-sm::placeholder {
+  color: var(--dim);
+}
+
+.input-sm:focus {
+  outline: none;
+  border-color: var(--brand);
+}
+
+.busca {
+  width: 190px;
 }
 
 /* ------------------------------------------------------- telas de passagem */
@@ -185,133 +340,551 @@ button {
   min-height: 100svh;
   padding: 24px;
   text-align: center;
+  background: var(--main);
 }
 
 .center-inner {
   display: grid;
   justify-items: center;
-  gap: 14px;
-  max-width: 380px;
+  gap: 16px;
+  max-width: 400px;
+  padding: 40px 32px;
+  border-radius: 12px;
+  background: var(--card);
+  box-shadow: 0 8px 30px -12px #000;
+}
+
+.center h1 {
+  font-size: 22px;
+  font-weight: 700;
 }
 
 .mark {
   display: grid;
   place-items: center;
-  width: 46px;
-  height: 46px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--card);
-  font-size: 20px;
+  width: 40px;
+  height: 40px;
+  border-radius: 14px;
+  background: linear-gradient(140deg, var(--brand), #8b5cf6);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
 }
 
-.center h1 {
-  font-size: 20px;
-  font-weight: 500;
-  letter-spacing: -0.01em;
+.mark.grande {
+  width: 56px;
+  height: 56px;
+  border-radius: 18px;
+  font-size: 17px;
 }
 
 .spinner {
-  width: 22px;
-  height: 22px;
-  border: 2px solid var(--border-strong);
-  border-top-color: var(--fg);
+  width: 26px;
+  height: 26px;
+  border: 2px solid var(--border);
+  border-top-color: var(--brand);
   border-radius: 50%;
-  animation: spin 0.7s linear infinite;
+  animation: gira 0.9s linear infinite;
 }
 
-@keyframes spin {
+@keyframes gira {
   to {
     transform: rotate(360deg);
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .spinner {
-    animation-duration: 2.4s;
-  }
+/* ------------------------------------------------------------------- app */
+
+.app {
+  display: grid;
+  grid-template-columns: 72px 240px minmax(0, 1fr) 240px;
+  height: 100svh;
 }
 
-/* -------------------------------------------------------------- cabeçalho */
+/* ----------------------------------------------------- barra de servidores */
 
-.topbar {
-  position: sticky;
-  top: 0;
-  z-index: 10;
+.rail {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 22px;
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg) 88%, transparent);
-  backdrop-filter: blur(10px);
-}
-
-.topbar .mark {
-  width: 30px;
-  height: 30px;
-  border-radius: var(--radius-sm);
-  font-size: 13px;
-}
-
-.topbar h1 {
-  font-size: 14px;
-  font-weight: 500;
-}
-
-.spacer {
-  flex: 1;
-}
-
-.who {
-  display: flex;
+  flex-direction: column;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  padding: 12px 0;
+  background: var(--rail);
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
-.who img {
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  background: var(--card);
+.rail-lista {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
 }
 
-/* ------------------------------------------------------------------- corpo */
-
-/*
- * Navegação à esquerda, conteúdo à direita.
- *
- * O painel cresceu para cinco assuntos, e empilhá-los numa rolagem só obrigava
- * a passar por tudo para chegar ao log. Cada um numa aba, e a barra lateral diz
- * onde se está sem gastar uma linha de conteúdo.
+/**
+ * O ícone de servidor do Discord, com a mesma mecânica: quadrado arredondado
+ * que vira círculo no hover, e a pílula branca da esquerda que cresce com o
+ * estado. Ela é o único indicador de "onde eu estou" nesta coluna.
  */
-.layout {
+.rail-item {
+  position: relative;
   display: grid;
-  grid-template-columns: 210px minmax(0, 1fr);
-  align-items: start;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  border: none;
+  border-radius: 16px;
+  background: var(--main);
+  color: var(--meio);
+  font-size: 15px;
+  font-weight: 600;
+  text-decoration: none;
+  transition:
+    border-radius 0.15s,
+    background 0.15s,
+    color 0.15s;
 }
 
-.shell {
-  /* Sem teto de largura: é um painel de operação, e a tela inteira é o
-     espaço útil. O respiro vem do padding, não de uma coluna estreita. */
-  padding: 22px;
+.rail-item:hover {
+  border-radius: 14px;
+  background: var(--brand);
+  color: #fff;
+}
+
+.rail-item.ativo {
+  border-radius: 14px;
+  background: var(--brand);
+  color: #fff;
+}
+
+.rail-pino {
+  position: absolute;
+  left: -12px;
+  width: 4px;
+  height: 8px;
+  border-radius: 0 4px 4px 0;
+  background: #fff;
+  transition:
+    height 0.15s,
+    opacity 0.15s;
+  opacity: 0;
+}
+
+.rail-item:hover .rail-pino {
+  height: 20px;
+  opacity: 1;
+}
+
+.rail-item.ativo .rail-pino {
+  height: 40px;
+  opacity: 1;
+}
+
+.rail-mark {
+  font-size: 14px;
+  letter-spacing: 0.5px;
+}
+
+.rail-item img {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+}
+
+.rail-item svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+}
+
+.rail-item.link:hover {
+  background: var(--ok);
+}
+
+/* Um traço de servidor com transmissão no ar. É a informação que faz olhar
+   para esta coluna sem ter de entrar em cada uma. */
+.rail-item .rail-live {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 12px;
+  height: 12px;
+  border: 3px solid var(--rail);
+  border-radius: 50%;
+  background: var(--danger);
+}
+
+.rail-sep {
+  width: 32px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--border);
+}
+
+/* ------------------------------------------------------------ coluna de canais */
+
+.sidebar {
   display: grid;
-  gap: var(--gap);
+  grid-template-rows: 48px minmax(0, 1fr) auto;
+  background: var(--sidebar);
   min-width: 0;
 }
 
-.banner {
-  padding: 11px 14px;
-  border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--danger) 10%, transparent);
-  color: var(--danger);
-  font-size: 13px;
+.sidebar-head {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 0 16px;
+  box-shadow: 0 1px 0 rgb(0 0 0 / 20%);
+  font-weight: 600;
+  font-size: 15px;
+  overflow: hidden;
 }
 
-/* Quatro números em uma linha, e uma coluna só no telefone. auto-fit deixa a
-   grade decidir sozinha quantos cabem — sem media query para cada tamanho. */
+.sidebar-sub {
+  color: var(--dim);
+  font-size: 11px;
+  font-weight: 400;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.canais {
+  padding: 8px;
+  overflow-y: auto;
+}
+
+.categoria {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 16px 8px 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.categoria.com-conta .conta {
+  margin-left: auto;
+}
+
+.canal {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 34px;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 500;
+  text-align: left;
+  transition:
+    background 0.12s,
+    color 0.12s;
+}
+
+.canal:hover {
+  background: var(--hover);
+  color: var(--meio);
+}
+
+.canal.ativo {
+  background: var(--ativo);
+  color: #fff;
+}
+
+.canal svg {
+  flex: none;
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  color: var(--dim);
+}
+
+.canal.ativo svg,
+.canal:hover svg {
+  color: var(--meio);
+}
+
+.canal > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conta {
+  margin-left: auto;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--card-2);
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.conta.alerta {
+  background: var(--danger);
+  color: #fff;
+  font-weight: 700;
+}
+
+.conta.live {
+  background: color-mix(in srgb, var(--danger) 22%, transparent);
+  color: #ff9c9e;
+}
+
+.canais-salas {
+  display: grid;
+  gap: 1px;
+}
+
+/* Os avatares de quem está dentro da sala, embaixo do canal — igual ao canal
+   de voz do Discord. É o que faz a coluna responder "onde está a gente" sem
+   ninguém clicar em nada. */
+.canal-gente {
+  display: flex;
+  gap: 4px;
+  padding: 2px 8px 6px 30px;
+}
+
+.canal-gente .av {
+  width: 20px;
+  height: 20px;
+  font-size: 8px;
+}
+
+.sidebar-vazio {
+  padding: 10px 8px;
+  color: var(--dim);
+  font-size: 12px;
+}
+
+/* ------------------------------------------------------- painel de usuário */
+
+.usuario {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px;
+  background: var(--card-2);
+}
+
+.usuario-eu {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+}
+
+.usuario-texto {
+  display: grid;
+  min-width: 0;
+}
+
+.usuario-texto strong {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usuario-sub {
+  color: var(--muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --------------------------------------------------------------- avatares */
+
+.av-caixa {
+  position: relative;
+  display: inline-grid;
+  flex: none;
+}
+
+.av {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: linear-gradient(140deg, #5865f2, #3b429f);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  overflow: hidden;
+  object-fit: cover;
+}
+
+/* O ponto de estado, recortado do avatar como no Discord. */
+.ponto {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 12px;
+  height: 12px;
+  border: 3px solid var(--card-2);
+  border-radius: 50%;
+  background: var(--dim);
+}
+
+.ponto.ok {
+  background: var(--ok);
+}
+
+.ponto.live {
+  background: var(--danger);
+}
+
+.ponto.warn {
+  background: var(--warn);
+}
+
+/* ------------------------------------------------------------- conteúdo */
+
+.conteudo {
+  display: grid;
+  grid-template-rows: 48px minmax(0, 1fr);
+  min-width: 0;
+  background: var(--main);
+}
+
+.barra {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px;
+  box-shadow: 0 1px 0 rgb(0 0 0 / 20%);
+  z-index: 2;
+}
+
+.barra h1 {
+  font-size: 15px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.barra-icone {
+  color: var(--dim);
+  font-size: 20px;
+  font-weight: 400;
+}
+
+.barra-icone svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.barra-tracinho {
+  width: 1px;
+  height: 22px;
+  background: var(--border);
+}
+
+.barra-sub {
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chip-filtro {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 6px 0 10px;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--brand) 25%, transparent);
+  color: #c9cdfb;
+  font-size: 12px;
+}
+
+.chip-filtro svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.pill-alert {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 12px;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--danger) 20%, transparent);
+  color: #ff9c9e;
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  max-width: 40ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pill-alert:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+.rolagem {
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.aba {
+  display: grid;
+  gap: var(--gap);
+  max-width: 1240px;
+  margin: 0 auto;
+}
+
+.banner {
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: #ff9c9e;
+  font-size: 13px;
+  margin-bottom: var(--gap);
+}
+
+/* ------------------------------------------------------------- cartões */
+
 .stats {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
@@ -320,21 +893,19 @@ button {
 
 .stat {
   padding: var(--pad);
-  display: grid;
-  gap: 3px;
 }
 
 .stat .value {
-  font-size: 30px;
-  font-weight: 500;
+  margin-top: 6px;
+  font-size: 28px;
+  font-weight: 700;
   letter-spacing: -0.02em;
-  line-height: 1.15;
   font-variant-numeric: tabular-nums;
 }
 
 .stat .sub {
-  color: var(--dim);
-  font-size: 12px;
+  color: var(--muted);
+  font-size: 12.5px;
 }
 
 .stat .sub.warn {
@@ -343,354 +914,148 @@ button {
 
 .panel {
   padding: var(--pad);
-  display: grid;
-  gap: 16px;
 }
 
 .panel-head {
   display: flex;
   align-items: center;
   gap: 10px;
+  margin-bottom: 14px;
 }
 
 .panel-head h2 {
-  font-size: 14px;
-  font-weight: 500;
+  font-size: 15px;
+  font-weight: 600;
 }
 
 .chart {
   display: block;
   width: 100%;
-  height: 190px;
+  height: 180px;
 }
 
 .legend {
   display: flex;
-  gap: 16px;
-  color: var(--muted);
+  gap: 12px;
   font-size: 12px;
+  color: var(--muted);
 }
 
 .legend span {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
 }
 
 .legend i {
-  width: 14px;
+  width: 8px;
   height: 2px;
-  border-radius: 2px;
-  background: currentColor;
+  border-radius: 1px;
 }
 
-.legend .in {
-  color: var(--brand);
+.legend .in i {
+  background: var(--brand);
 }
 
-.legend .out {
-  color: var(--ok);
+.legend .out i {
+  background: var(--ok);
 }
 
-/* A linha de descarte é vermelha porque é a única das três que pede ação: as
-   outras duas são o serviço funcionando. */
-.legend .drop {
-  color: var(--danger);
+.legend .drop i {
+  background: var(--danger);
 }
 
-/* ----------------------------------------------------------------- tabela */
+.duo {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--gap);
+}
 
-/* A rolagem fica na caixa, não na página: tabela larga no telefone rola
-   sozinha em vez de empurrar o corpo inteiro para o lado. */
+@media (max-width: 900px) {
+  .duo {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* --------------------------------------------------------------- tabela */
+
 .table-scroll {
   overflow-x: auto;
+}
+
+/* A tabela que ocupa o cartão inteiro sangra até a borda dele; a que vive
+   dentro de uma transmissão, não — lá embaixo dela ainda vêm os botões, e a
+   margem negativa passava a tabela por cima deles. */
+.panel > .table-scroll {
   margin: 0 calc(var(--pad) * -1) calc(var(--pad) * -1);
-  padding: 0 var(--pad) var(--pad);
+}
+
+.stream .table-scroll table {
+  background: transparent;
+}
+
+.stream th {
+  background: var(--card-2);
 }
 
 table {
   width: 100%;
   border-collapse: collapse;
-  white-space: nowrap;
+  font-size: 13px;
 }
 
 th {
-  padding: 0 14px 9px 0;
-  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  padding: 8px 12px;
+  background: var(--card);
   color: var(--muted);
-  font-size: 12px;
-  font-weight: 400;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
   text-align: left;
+  white-space: nowrap;
 }
 
 td {
-  padding: 11px 14px 11px 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  padding: 9px 12px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
   vertical-align: middle;
 }
 
-tr:last-child td {
-  border-bottom: 0;
+tbody tr:hover td {
+  background: color-mix(in srgb, var(--hover) 60%, transparent);
 }
 
-th:last-child,
-td:last-child {
-  padding-right: 0;
+.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .cell {
   display: grid;
-  gap: 1px;
+  line-height: 1.25;
 }
 
 .cell .second {
   color: var(--dim);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-
-.num {
-  font-variant-numeric: tabular-nums;
-}
-
-.empty {
-  padding: 26px 0 6px;
-  color: var(--dim);
-  text-align: center;
-  font-size: 13px;
-}
-
-/* -------------------------------------------------------- recursos e ambiente */
-
-/* Lado a lado onde couber, empilhados no telefone. auto-fit resolve sem media
-   query: cada painel pede 340px e a grade decide quantos cabem. */
-.duo {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
-  gap: var(--gap);
-}
-
-.minis {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 18px 14px;
-}
-
-.mini {
-  display: grid;
-  gap: 2px;
-}
-
-.mini-value {
-  font-size: 19px;
-  font-weight: 500;
-  letter-spacing: -0.01em;
-  font-variant-numeric: tabular-nums;
-}
-
-.dl {
-  display: grid;
-  gap: 9px;
-  font-size: 13px;
-}
-
-.dl > div {
-  display: flex;
-  align-items: baseline;
-  gap: 14px;
-}
-
-.dl dt {
-  color: var(--muted);
-  white-space: nowrap;
-}
-
-/* O valor encosta na direita e corta com reticências: endereço e ID são
-   longos, e esticar a caixa quebraria a coluna ao lado. */
-.dl dd {
-  margin-left: auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: 11.5px;
   font-family: var(--mono);
-  font-size: 12px;
 }
 
-@media (max-width: 640px) {
-  .shell,
-  .topbar {
-    padding-left: 16px;
-    padding-right: 16px;
-  }
+.clicavel {
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  transition: text-decoration-color 0.15s;
 }
 
-/* ------------------------------------------------------------- navegação */
-
-.nav {
-  position: sticky;
-  top: 55px;
-  display: grid;
-  gap: 2px;
-  padding: 18px 10px;
-  border-right: 1px solid var(--border);
-  /* A altura da barra do topo já foi descontada pelo `top`; o resto da tela é
-     dela, para a borda não parar no meio do caminho. */
-  min-height: calc(100svh - 55px);
-  align-content: start;
+.clicavel:hover {
+  text-decoration-color: var(--muted);
 }
 
-.nav-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 11px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted);
-  font-size: 13px;
-  text-align: left;
-  transition:
-    background 0.15s,
-    color 0.15s;
-}
-
-.nav-item:hover {
-  background: var(--card);
-  color: var(--fg);
-}
-
-.nav-item.ativo {
-  background: var(--card);
-  color: var(--fg);
-}
-
-.nav-item svg {
-  width: 17px;
-  height: 17px;
-  flex: 0 0 auto;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.7;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.nav-item span {
-  flex: 1;
-}
-
-/* O contador ao lado do nome. Só aparece com número: um "0" permanente ensina
-   a não olhar, e é justamente ele que precisa ser notado quando muda. */
-.nav-item em {
-  font-style: normal;
-  font-size: 11px;
-  color: var(--dim);
-  font-variant-numeric: tabular-nums;
-}
-
-.aba {
-  display: grid;
-  gap: var(--gap);
-}
-
-/* No telefone a barra vira uma faixa rolável no topo do conteúdo. */
-@media (max-width: 860px) {
-  .layout {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .nav {
-    position: static;
-    min-height: 0;
-    grid-auto-flow: column;
-    grid-auto-columns: max-content;
-    justify-content: start;
-    overflow-x: auto;
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
-    padding: 10px;
-  }
-
-  .nav-item span {
-    flex: none;
-  }
-}
-
-/* ---------------------------------------------------------- primitivos 2 */
-
-.btn-sm {
-  height: 28px;
-  padding: 0 10px;
-  font-size: 12px;
-}
-
-.btn-danger {
-  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
-  background: color-mix(in srgb, var(--danger) 14%, transparent);
-  color: var(--danger);
-}
-
-.btn-danger:hover {
-  background: color-mix(in srgb, var(--danger) 22%, transparent);
-  border-color: var(--danger);
-}
-
-.select {
-  height: 28px;
-  padding: 0 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--card);
-  color: var(--fg);
-  font: inherit;
-  font-size: 12px;
-}
-
-.hint {
-  color: var(--dim);
-  font-size: 12px;
-}
-
-.note {
-  color: var(--muted);
-  font-size: 13px;
-  max-width: 70ch;
-}
-
-.badge.warn {
-  border-color: color-mix(in srgb, var(--warn) 35%, transparent);
-  background: color-mix(in srgb, var(--warn) 12%, transparent);
-  color: var(--warn);
-}
-
-.badge.bad {
-  border-color: color-mix(in srgb, var(--danger) 35%, transparent);
-  background: color-mix(in srgb, var(--danger) 12%, transparent);
-  color: var(--danger);
-}
-
-/* O aviso do topo. Botão, e não texto, porque ele leva ao lugar onde o
-   problema está — um alerta que não vai a lugar nenhum vira ruído. */
-.pill-alert {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 12px;
-  border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
-  border-radius: var(--radius-pill);
-  background: color-mix(in srgb, var(--warn) 14%, transparent);
-  color: var(--warn);
-  font-size: 12px;
-}
-
-.pill-alert:hover {
-  background: color-mix(in srgb, var(--warn) 22%, transparent);
-}
-
-/* -------------------------------------------------------------- medidores */
+/* -------------------------------------------------- recursos e ambiente */
 
 .meters {
   display: grid;
@@ -700,37 +1065,28 @@ td:last-child {
 .meter-head {
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
-  gap: 10px;
-  font-size: 13px;
-  color: var(--muted);
   margin-bottom: 5px;
+  color: var(--meio);
+  font-size: 12.5px;
 }
 
 .meter-head strong {
-  color: var(--fg);
-  font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
 
 .bar {
   height: 6px;
-  border-radius: var(--radius-pill);
-  background: var(--border);
+  border-radius: 3px;
+  background: var(--entrada);
   overflow: hidden;
 }
 
-/* A cor sai do próprio elemento: verde até apertar, âmbar quando aperta,
-   vermelho quando já apertou. Um medidor sempre da mesma cor não avisa nada. */
 .bar i {
   display: block;
   height: 100%;
-  width: 0;
-  border-radius: inherit;
-  background: var(--ok);
-  transition:
-    width 0.4s ease,
-    background 0.4s ease;
+  border-radius: 3px;
+  background: var(--brand);
+  transition: width 0.4s;
 }
 
 .bar i.warn {
@@ -741,15 +1097,58 @@ td:last-child {
   background: var(--danger);
 }
 
-/* ------------------------------------------------------------------ salas */
+.minis {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.mini-value {
+  margin-top: 3px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.dl {
+  display: grid;
+  gap: 1px;
+}
+
+.dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+  font-size: 13px;
+}
+
+.dl dt {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.dl dd {
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 12px;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------- salas */
 
 .salas {
   display: grid;
-  gap: var(--gap);
+  gap: 10px;
 }
 
 .sala {
-  padding: 0;
   overflow: hidden;
 }
 
@@ -758,37 +1157,37 @@ td:last-child {
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: 14px var(--pad);
-  border: 0;
+  padding: 12px 16px;
+  border: none;
   background: transparent;
   text-align: left;
+  transition: background 0.12s;
 }
 
 .sala-head:hover {
-  background: var(--card-hover);
+  background: var(--hover);
 }
 
 .sala-nome {
-  font-size: 15px;
-  font-weight: 500;
+  font-size: 14px;
+  font-weight: 600;
 }
 
 .sala-sub {
-  color: var(--dim);
+  color: var(--muted);
   font-size: 12px;
 }
 
-/* A seta gira em vez de trocar de desenho: é a mesma seta, noutro estado. */
 .sala-seta {
-  width: 16px;
-  height: 16px;
-  flex: 0 0 auto;
+  flex: none;
+  width: 14px;
+  height: 14px;
   fill: none;
   stroke: var(--muted);
   stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
-  transition: transform 0.18s;
+  transition: transform 0.15s;
 }
 
 .sala.aberta .sala-seta {
@@ -796,34 +1195,30 @@ td:last-child {
 }
 
 .sala-corpo {
-  padding: 0 var(--pad) var(--pad);
   display: grid;
-  gap: 14px;
+  gap: 12px;
+  padding: 4px 16px 16px;
   border-top: 1px solid var(--border);
-  padding-top: 14px;
 }
 
 .stream {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 13px;
   display: grid;
-  gap: 11px;
+  gap: 10px;
+  padding: 14px;
+  border-radius: var(--radius);
+  background: var(--card-2);
 }
 
 .stream-head {
   display: flex;
   align-items: center;
-  gap: 9px;
-  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .stream-nome {
-  font-weight: 500;
+  font-weight: 600;
 }
 
-/* Os números do relay, lado a lado. É aqui que travamento se explica: a fila
-   de alguém contra o teto que decide o descarte. */
 .chips {
   display: flex;
   flex-wrap: wrap;
@@ -832,32 +1227,49 @@ td:last-child {
 
 .chip {
   display: inline-flex;
-  align-items: baseline;
-  gap: 5px;
+  align-items: center;
+  gap: 6px;
   padding: 3px 9px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  font-size: 12px;
+  border-radius: var(--radius-sm);
   color: var(--muted);
-  white-space: nowrap;
+  font-size: 11.5px;
 }
 
 .chip b {
   color: var(--fg);
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  font-weight: 600;
 }
 
 .acoes {
   display: flex;
   flex-wrap: wrap;
-  gap: 7px;
+  align-items: center;
+  gap: 8px;
 }
 
 .acoes-fim {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+  margin-top: 14px;
+}
+
+.codigo-sala {
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--entrada);
+  color: #4ac57f;
+  font-family: var(--mono);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.codigo-sala:hover {
+  background: #111214;
 }
 
 /* --------------------------------------------------------------- sinais */
@@ -869,29 +1281,28 @@ td:last-child {
 
 .sinal {
   display: flex;
-  align-items: flex-start;
   gap: 10px;
-  padding: 11px 13px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  font-size: 13px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  background: var(--card-2);
+  border-left: 3px solid var(--ok);
 }
 
 .sinal.aviso {
-  border-color: color-mix(in srgb, var(--warn) 40%, transparent);
-  background: color-mix(in srgb, var(--warn) 8%, transparent);
+  border-left-color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 8%, var(--card-2));
 }
 
 .sinal.erro {
-  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
-  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  border-left-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, var(--card-2));
 }
 
 .sinal-ponto {
-  width: 7px;
-  height: 7px;
+  flex: none;
+  width: 8px;
+  height: 8px;
   margin-top: 6px;
-  flex: 0 0 auto;
   border-radius: 50%;
   background: var(--ok);
 }
@@ -904,54 +1315,63 @@ td:last-child {
   background: var(--danger);
 }
 
+.sinal-texto {
+  display: grid;
+  gap: 3px;
+}
+
 .sinal-texto strong {
-  display: block;
-  font-weight: 500;
+  font-size: 13.5px;
 }
 
 .sinal-texto span {
-  color: var(--muted);
+  color: var(--meio);
+  font-size: 12.5px;
+  line-height: 1.5;
 }
 
 /* ------------------------------------------------------------------- log */
 
 .log {
-  max-height: 460px;
-  overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: #0d0d0d;
+  max-height: 340px;
+  padding: 10px;
+  border-radius: var(--radius);
+  background: var(--entrada);
   font-family: var(--mono);
   font-size: 12px;
-  line-height: 1.65;
+  line-height: 1.6;
+  overflow-y: auto;
 }
 
 .log-linha {
-  display: grid;
-  grid-template-columns: 62px 88px minmax(0, 1fr);
-  gap: 10px;
-  padding: 3px 11px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  display: flex;
+  gap: 8px;
+  padding: 2px 4px;
+  border-radius: 3px;
 }
 
-.log-linha:last-child {
-  border-bottom: 0;
+.log-linha:hover {
+  background: rgb(255 255 255 / 4%);
+}
+
+.log-linha.tem-dados {
+  cursor: pointer;
 }
 
 .log-hora {
+  flex: none;
   color: var(--dim);
 }
 
 .log-escopo {
-  color: var(--dim);
+  flex: none;
+  width: 88px;
+  color: #9b8afb;
 }
 
-/* A mensagem quebra em vez de rolar para o lado: um log com rolagem
-   horizontal esconde exatamente a ponta onde o erro costuma estar. */
 .log-msg {
-  color: var(--muted);
-  white-space: pre-wrap;
-  word-break: break-word;
+  color: var(--meio);
+  overflow-wrap: anywhere;
 }
 
 .log-linha.aviso .log-msg {
@@ -959,85 +1379,186 @@ td:last-child {
 }
 
 .log-linha.erro .log-msg {
-  color: var(--danger);
+  color: #ff9c9e;
+}
+
+/* O que o evento trouxe junto, quando trouxe. Fechado por padrão: são cinco
+   números por linha, e abrir todos vira parede. */
+.log-dados {
+  margin: 2px 0 6px 96px;
+  padding: 6px 8px;
+  border-left: 2px solid var(--border);
+  color: #7ee2b8;
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 /* ---------------------------------------------------------------- ajustes */
 
 .ajustes {
   display: grid;
-  gap: 16px;
 }
 
 .ajuste {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 150px;
-  gap: 12px 16px;
+  display: flex;
   align-items: center;
-  padding-bottom: 14px;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
   border-bottom: 1px solid var(--border);
 }
 
 .ajuste:last-child {
-  border-bottom: 0;
-  padding-bottom: 0;
+  border-bottom: none;
 }
 
 .ajuste-nome {
-  font-size: 13px;
+  font-weight: 600;
+  font-size: 13.5px;
 }
 
 .ajuste-faixa {
   color: var(--dim);
-  font-size: 12px;
+  font-family: var(--mono);
+  font-size: 11.5px;
 }
 
-/* Marca o campo que foi mexido e ainda não foi aplicado: sem isso, "Aplicar"
-   não diz se vai fazer alguma coisa. */
 .ajuste input {
-  width: 100%;
+  width: 130px;
   height: 32px;
   padding: 0 10px;
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  background: var(--bg);
+  background: var(--entrada);
   color: var(--fg);
   font: inherit;
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
+  font-family: var(--mono);
   text-align: right;
 }
 
-.ajuste input.sujo {
-  border-color: var(--brand);
-}
-
-/* O campo de senha da sala mora na linha de ações, ao lado dos botões, e não
-   numa coluna como os ajustes — daí a largura própria e o texto à esquerda. */
-.input-sm {
-  height: 30px;
-  width: 180px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--fg);
-  font: inherit;
-  font-size: 13px;
-}
-
-.input-sm:focus {
+.ajuste input:focus {
   outline: none;
   border-color: var(--brand);
 }
 
-/* ---------------------------------------------------------------- avisos */
+/* Editado e ainda não aplicado. Sem isto, "apliquei?" só se responde
+   recarregando a página. */
+.ajuste input.sujo {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+/* ------------------------------------------------------------------ json */
+
+.json {
+  max-height: 62vh;
+  padding: 14px;
+  border-radius: var(--radius);
+  background: var(--entrada);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.55;
+  overflow: auto;
+  white-space: pre;
+  tab-size: 2;
+}
+
+.j-chave {
+  color: #9b8afb;
+}
+
+.j-texto {
+  color: #7ee2b8;
+}
+
+.j-numero {
+  color: #f0b232;
+}
+
+.j-bool {
+  color: #ff9c9e;
+}
+
+.j-nulo {
+  color: var(--dim);
+}
+
+.j-fora {
+  opacity: 0.25;
+}
+
+/* ------------------------------------------------------ quem está online */
+
+.membros {
+  padding: 16px 8px;
+  background: var(--sidebar);
+  overflow-y: auto;
+}
+
+.membros-cat {
+  padding: 16px 8px 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.membro {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 5px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  text-align: left;
+  transition: background 0.12s;
+}
+
+.membro:hover {
+  background: var(--hover);
+}
+
+.membro-texto {
+  display: grid;
+  min-width: 0;
+}
+
+.membro-nome {
+  color: var(--meio);
+  font-size: 14px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.membro:hover .membro-nome {
+  color: var(--fg);
+}
+
+.membro-sub {
+  color: var(--dim);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.membro .ponto {
+  border-color: var(--sidebar);
+}
+
+/* --------------------------------------------------------------- avisos */
 
 .toasts {
   position: fixed;
-  right: 18px;
-  bottom: 18px;
-  z-index: 50;
+  right: 16px;
+  bottom: 16px;
+  z-index: 60;
   display: grid;
   gap: 8px;
   justify-items: end;
@@ -1045,22 +1566,22 @@ td:last-child {
 
 .toast {
   padding: 10px 14px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--card);
+  border-radius: var(--radius);
+  background: var(--elevado);
+  color: var(--fg);
   font-size: 13px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
-  animation: entra 0.18s ease;
+  box-shadow: 0 8px 24px -10px #000;
+  animation: entra 0.18s ease-out;
 }
 
 .toast.bom {
-  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
-  color: var(--ok);
+  background: var(--ok);
+  color: #fff;
 }
 
 .toast.ruim {
-  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
-  color: var(--danger);
+  background: var(--danger);
+  color: #fff;
 }
 
 @keyframes entra {
@@ -1070,54 +1591,209 @@ td:last-child {
   }
 }
 
-/* --------------------------------------------------------------- diálogo */
+/* --------------------------------------------------------------- diálogos */
 
 .modal {
   position: fixed;
   inset: 0;
-  z-index: 60;
+  z-index: 70;
   display: grid;
   place-items: center;
-  padding: 20px;
-  background: rgba(0, 0, 0, 0.6);
+  padding: 24px;
+  background: rgb(0 0 0 / 70%);
+}
+
+/* O "ir para" nasce no alto, como o do Discord: a lista cresce para baixo e a
+   caixa não pula de lugar a cada tecla. */
+.modal.topo {
+  align-items: start;
+  padding-top: 12vh;
 }
 
 .modal-box {
-  display: grid;
-  gap: 12px;
-  width: min(420px, 100%);
-  padding: 22px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
+  width: min(440px, 100%);
+  padding: 24px;
+  border-radius: 8px;
   background: var(--card);
+  box-shadow: 0 12px 40px -12px #000;
 }
 
 .modal-box h2 {
-  font-size: 16px;
-  font-weight: 500;
+  font-size: 19px;
+  font-weight: 700;
+  margin-bottom: 8px;
 }
 
 .modal-acoes {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  margin-top: 4px;
+  margin-top: 20px;
 }
 
-/* O código sorteado é para ser lido em voz alta e copiado: monoespaçado, com
-   espaço entre as letras, e clicável inteiro. */
-.codigo-sala {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 15px;
-  letter-spacing: 2px;
-  padding: 4px 10px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--bg);
+.switcher-box {
+  width: min(560px, 100%);
+  border-radius: 8px;
+  background: var(--card);
+  box-shadow: 0 12px 40px -12px #000;
+  overflow: hidden;
+}
+
+.switcher-input {
+  width: 100%;
+  height: 48px;
+  padding: 0 16px;
+  border: none;
+  background: var(--entrada);
   color: var(--fg);
-  cursor: pointer;
+  font: inherit;
+  font-size: 15px;
 }
 
-.codigo-sala:hover {
-  border-color: var(--brand);
+.switcher-input:focus {
+  outline: none;
+}
+
+.switcher-lista {
+  max-height: 46vh;
+  padding: 8px;
+  overflow-y: auto;
+}
+
+.switcher-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--meio);
+  font-size: 14px;
+  text-align: left;
+}
+
+.switcher-item.marcado,
+.switcher-item:hover {
+  background: var(--ativo);
+  color: #fff;
+}
+
+.switcher-tipo {
+  margin-left: auto;
+  color: var(--dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+/* O cartão de perfil, com a mesma capa colorida do Discord. */
+.perfil-box {
+  width: min(340px, 100%);
+  border-radius: 8px;
+  background: var(--card-2);
+  overflow: hidden;
+  box-shadow: 0 12px 40px -12px #000;
+}
+
+.perfil-capa {
+  height: 60px;
+  background: linear-gradient(120deg, var(--brand), #8b5cf6);
+}
+
+.perfil-corpo {
+  padding: 0 16px 16px;
+}
+
+.perfil-av {
+  display: block;
+  margin-top: -32px;
+  margin-bottom: 8px;
+}
+
+.perfil-av .av {
+  width: 72px;
+  height: 72px;
+  border: 6px solid var(--card-2);
+  font-size: 20px;
+}
+
+.perfil-corpo h2 {
+  font-size: 19px;
+  font-weight: 700;
+}
+
+.perfil-corpo .dl {
+  margin: 12px 0;
+  padding: 12px;
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
+/* ------------------------------------------------------------ responsivo */
+
+/* O botão da barra esconde a coluna de membros; em telas estreitas ela já
+   nasce escondida e o mesmo botão a traz de volta no lugar dos canais. */
+.app.sem-membros {
+  grid-template-columns: 72px 240px minmax(0, 1fr);
+}
+
+.app.sem-membros .membros {
+  display: none;
+}
+
+@media (max-width: 1180px) {
+  .app {
+    grid-template-columns: 72px 240px minmax(0, 1fr);
+  }
+
+  .membros {
+    display: none;
+  }
+
+  .app.com-membros {
+    grid-template-columns: 72px minmax(0, 1fr) 240px;
+  }
+
+  .app.com-membros .sidebar {
+    display: none;
+  }
+
+  .app.com-membros .membros {
+    display: block;
+  }
+}
+
+@media (max-width: 820px) {
+  .app {
+    grid-template-columns: 56px minmax(0, 1fr);
+  }
+
+  .sidebar,
+  .app.com-membros .sidebar {
+    display: none;
+  }
+
+  .rail-item {
+    width: 40px;
+    height: 40px;
+  }
+
+  .barra-sub,
+  .barra-tracinho {
+    display: none;
+  }
+
+  .duo,
+  .minis {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
 }

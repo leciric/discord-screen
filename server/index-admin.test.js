@@ -21,6 +21,9 @@ process.env.DISCORD_CLIENT_ID = '111111111111111111';
 process.env.DISCORD_CLIENT_SECRET = 'segredo-da-aplicacao';
 process.env.DISCORD_BOT_TOKEN = 'token-do-bot';
 process.env.PUBLIC_ORIGIN = 'https://exemplo.test';
+// A página de estado com a porta fechada: entra quem tem conta do Discord E
+// está neste servidor. É a configuração de quem publicou o endereço.
+process.env.DISCORD_GUILD_ID = '555555555555555555';
 
 vi.spyOn(console, 'log').mockImplementation(() => {});
 vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -460,5 +463,145 @@ describe('/api/admin/logout', () => {
 
     expect(cookie).toContain('Max-Age=0');
     expect(cookie).toContain('Secure');
+  });
+});
+
+/**
+ * A porta da página de estado.
+ *
+ * Ela mostra nome e foto de quem está online agora, e por isso não é aberta: a
+ * conta prova quem é, e a lista de servidores do Discord prova que é gente da
+ * casa. As duas provas vêm do Discord — nada disso é enviado pelo navegador, e
+ * o que o navegador enviasse não valeria nada.
+ */
+describe('página de estado', () => {
+  const GUILD = '555555555555555555';
+  const stateStatus = (voltar = null) =>
+    signToken({ scope: 'oauth-state', target: 'servidor', voltar }, 600);
+
+  const comoVisitante = (extra = {}) => ({
+    Cookie: `discord_screen_status=${signToken(
+      { scope: 'status', uid: '4', name: 'Vera', guild: GUILD, guildName: 'Casa', ...extra },
+      3600,
+    )}`,
+  });
+
+  it('pede o escopo de guilds no login, que é o que permite a checagem', async () => {
+    const destino = new URL((await get('/servidor/auth/login')).headers.get('location'));
+
+    expect(destino.hostname).toBe('discord.com');
+    expect(destino.searchParams.get('scope')).toBe('identify guilds');
+  });
+
+  it('deixa entrar quem está no servidor, e emite o cookie', async () => {
+    finge('https://discord.com/api/oauth2/token', () => json({ access_token: 'tok' }));
+    finge('https://discord.com/api/users/@me/guilds', () => json([{ id: GUILD, name: 'Casa' }]));
+    finge('https://discord.com/api/users/@me', perfil(OUTRO));
+
+    const resposta = await get(`/auth/callback?code=abc&state=${stateStatus()}`);
+
+    expect(resposta.headers.get('location')).toBe('/servidor');
+    expect(resposta.headers.get('set-cookie')).toContain('discord_screen_status=');
+    expect(resposta.headers.get('set-cookie')).toContain('HttpOnly');
+  });
+
+  it('recusa quem tem conta mas não está no servidor', async () => {
+    finge('https://discord.com/api/oauth2/token', () => json({ access_token: 'tok' }));
+    finge('https://discord.com/api/users/@me/guilds', () => json([{ id: '9', name: 'Outra' }]));
+    finge('https://discord.com/api/users/@me', perfil(OUTRO));
+
+    const resposta = await get(`/auth/callback?code=abc&state=${stateStatus()}`);
+
+    expect(resposta.headers.get('location')).toBe('/servidor?error=fora');
+    expect(resposta.headers.get('set-cookie')).toBeNull();
+  });
+
+  it('volta para onde o convite apontava, e só para dentro deste site', async () => {
+    finge('https://discord.com/api/oauth2/token', () => json({ access_token: 'tok' }));
+    finge('https://discord.com/api/users/@me/guilds', () => json([{ id: GUILD }]));
+    finge('https://discord.com/api/users/@me', perfil(OUTRO));
+
+    const dentro = await get(`/auth/callback?code=abc&state=${stateStatus('/?sala=abc')}`);
+    expect(dentro.headers.get('location')).toBe('/?sala=abc');
+
+    // "//outro.site" é URL absoluta para o navegador: sem a recusa, este
+    // parâmetro seria um redirect aberto com o nosso domínio na barra.
+    const fora = await get(`/auth/callback?code=abc&state=${stateStatus('//outro.site')}`);
+    expect(fora.headers.get('location')).toBe('/servidor');
+  });
+
+  it('não conta nada a quem não entrou', async () => {
+    const resposta = await get('/api/publico');
+
+    expect(resposta.status).toBe(401);
+    expect(await resposta.json()).toMatchObject({ error: 'login_required' });
+  });
+
+  it('conta o que está acontecendo a quem entrou', async () => {
+    const resposta = await get('/api/publico', { headers: comoVisitante() });
+
+    expect(resposta.status).toBe(200);
+    const corpo = await resposta.json();
+    expect(corpo.ok).toBe(true);
+    expect(Array.isArray(corpo.salas)).toBe(true);
+    expect(corpo.resumo).toHaveProperty('pessoas');
+  });
+
+  it('aceita o cookie do painel: quem administra já provou mais do que isto', async () => {
+    expect((await get('/api/publico', { headers: comoAdmin() })).status).toBe(200);
+  });
+
+  it('diz quem está olhando, para a página desenhar o cabeçalho', async () => {
+    const corpo = await (await get('/api/servidor/me', { headers: comoVisitante() })).json();
+
+    expect(corpo).toMatchObject({ ligado: true, aberto: false, servidor: 'Casa' });
+    expect(corpo.user.name).toBe('Vera');
+  });
+
+  it('sem sessão, diz o que falta em vez de só recusar', async () => {
+    const resposta = await get('/api/servidor/me');
+
+    expect(resposta.status).toBe(401);
+    expect(await resposta.json()).toMatchObject({
+      error: 'login_required',
+      aplicacao: true,
+      exigeServidor: true,
+    });
+  });
+
+  it('o logout apaga o cookie', async () => {
+    const resposta = await post('/api/servidor/logout');
+
+    expect(resposta.headers.get('set-cookie')).toContain('Max-Age=0');
+  });
+});
+
+/**
+ * O convite: o link que se cola no Discord para quem não consegue entrar por lá.
+ */
+describe('/convite', () => {
+  const comoVisitante = {
+    Cookie: `discord_screen_status=${signToken({ scope: 'status', uid: '4', name: 'Vera' }, 3600)}`,
+  };
+
+  it('leva direto à sala quem já entrou', async () => {
+    const resposta = await get('/convite/abc123', { headers: comoVisitante });
+
+    expect(resposta.headers.get('location')).toBe('/?sala=abc123');
+  });
+
+  it('manda ao login quem não entrou, guardando a sala para depois', async () => {
+    const resposta = await get('/convite/abc123');
+
+    expect(resposta.headers.get('location')).toBe(
+      '/servidor/auth/login?voltar=%2F%3Fsala%3Dabc123',
+    );
+  });
+
+  it('recusa um id que não tem cara de sala, antes de virar destino', async () => {
+    // O id vira o destino de um redirecionamento: o que não cabe no alfabeto
+    // de uma sala não chega a virar Location nenhum.
+    expect((await get('/convite/abc%20def')).status).toBe(400);
+    expect((await get('/convite/%3Cscript%3E')).status).toBe(400);
   });
 });

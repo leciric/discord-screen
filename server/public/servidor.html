@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Nomes de pessoas que estão online agora não são conteúdo para buscador
+         guardar. Só entra quem entrou com o Discord, e nem por isso a página
+         precisa existir num índice. -->
+    <meta name="robots" content="noindex,nofollow" />
+    <title>O servidor agora · Sala de Tela</title>
+    <link rel="stylesheet" href="/servidor.css?v=2" />
+  </head>
+  <body>
+    <!-- O brilho do topo. aria-hidden porque não conta nada: é o que separa
+         "página escura" de "página escura que alguém desenhou". -->
+    <div class="brilho" aria-hidden="true"></div>
+
+    <main id="carregando" class="portao">
+      <div class="portao-caixa">
+        <div class="spinner" aria-hidden="true"></div>
+        <p class="apagado">Verificando sua sessão…</p>
+      </div>
+    </main>
+
+    <!--
+      A porta. Quem chega sem ter entrado para aqui.
+
+      A página mostra nome e foto de quem está online agora, e isso é da turma
+      do servidor — não do endereço inteiro da internet. Quem entra prova as
+      duas coisas com o próprio Discord: que tem conta, e que está no servidor.
+    -->
+    <main id="portao" class="portao" hidden>
+      <div class="portao-caixa">
+        <span class="mark grande" aria-hidden="true">ST</span>
+        <h1 id="portaoTitulo">Quem está no ar agora</h1>
+        <p id="portaoTexto" class="portao-texto">
+          Esta página mostra as salas abertas e quem está dentro delas. Entre com o Discord para ver
+          — é preciso estar no nosso servidor.
+        </p>
+        <div id="portaoErro" class="aviso" hidden></div>
+        <a id="portaoEntrar" class="btn btn-brand grande" href="/servidor/auth/login">
+          Entrar com Discord
+        </a>
+        <p class="apagado">
+          Só pedimos a sua identificação e a lista de servidores de que você participa — para
+          conferir se você está no nosso. Nada é publicado em seu nome.
+        </p>
+        <p class="apagado"><a href="/">Voltar para o site</a></p>
+      </div>
+    </main>
+
+    <div id="pagina" hidden>
+      <header class="topo">
+        <a class="marca" href="/">
+          <span class="mark" aria-hidden="true">ST</span>
+          <span class="marca-nome">Sala de Tela</span>
+        </a>
+
+        <!-- O ponto é o único indicador de conexão: verde pulsando enquanto os
+             números são de agora, vermelho e parado quando pararam de chegar. -->
+        <span id="vivo" class="vivo"><i></i> ao vivo</span>
+
+        <div class="spacer"></div>
+
+        <span id="noAr" class="apagado"></span>
+
+        <span id="euCaixa" class="eu" hidden>
+          <img id="euAvatar" class="av" alt="" hidden />
+          <span id="euIniciais" class="av">·</span>
+          <span id="euNome"></span>
+          <button id="euSair" class="btn btn-sm">Sair</button>
+        </span>
+
+        <!-- O link para colar no Discord. Ele existe aqui, e não só em cada
+             sala, porque a pergunta mais comum é "manda o link disso" — e a
+             resposta era a pessoa copiar a barra de endereço, que às vezes vem
+             com ?error= de uma tentativa antiga junto. -->
+        <button id="copiarPagina" class="btn" title="Copiar o link desta página">
+          <svg viewBox="0 0 24 24" aria-hidden="true" class="ic">
+            <rect x="9" y="9" width="11" height="11" rx="2" />
+            <path d="M5 15V5a2 2 0 0 1 2-2h10" />
+          </svg>
+          <span>Copiar link</span>
+        </button>
+
+        <a class="btn btn-brand" href="/">Entrar no site</a>
+      </header>
+
+      <main class="corpo">
+        <section class="hero">
+          <h1>O que está acontecendo agora</h1>
+          <p class="sub">
+            As salas abertas neste servidor, quem está dentro delas e o que está no ar. Atualiza
+            sozinho a cada poucos segundos — e dá para entrar em qualquer sala do site daqui mesmo,
+            pelo navegador.
+          </p>
+
+          <div class="numeros">
+            <article class="numero">
+              <p class="rotulo">Pessoas online</p>
+              <p id="numPessoas" class="valor">—</p>
+              <p id="subPessoas" class="apagado">&nbsp;</p>
+            </article>
+            <article class="numero">
+              <p class="rotulo">Salas</p>
+              <p id="numSalas" class="valor">—</p>
+              <p id="subSalas" class="apagado">&nbsp;</p>
+            </article>
+            <article class="numero">
+              <p class="rotulo">Telas no ar</p>
+              <p id="numTelas" class="valor">—</p>
+              <p id="subTelas" class="apagado">&nbsp;</p>
+            </article>
+            <article class="numero">
+              <p class="rotulo">Passando agora</p>
+              <p id="numBanda" class="valor">—</p>
+              <p id="subBanda" class="apagado">&nbsp;</p>
+            </article>
+          </div>
+        </section>
+
+        <div id="aviso" class="aviso" hidden></div>
+
+        <section class="bloco">
+          <div class="bloco-head">
+            <h2>Salas</h2>
+            <span id="contaSalas" class="pilula">0</span>
+            <div class="spacer"></div>
+            <span class="dica">Clique para entrar pelo navegador</span>
+          </div>
+
+          <p id="salasVazio" class="vazio" hidden>
+            Nenhuma sala aberta agora. <a href="/">Crie a primeira</a> — ela aparece aqui no
+            instante seguinte.
+          </p>
+          <div id="salas" class="salas"></div>
+        </section>
+
+        <section class="bloco">
+          <div class="bloco-head">
+            <h2>Quem está online</h2>
+            <span id="contaPessoas" class="pilula">0</span>
+          </div>
+
+          <p id="pessoasVazio" class="vazio" hidden>Ninguém conectado neste instante.</p>
+          <div id="pessoas" class="pessoas"></div>
+        </section>
+      </main>
+
+      <div id="avisos" class="avisos" aria-live="polite"></div>
+
+      <footer class="rodape">
+        <p>
+          Quem entra numa sala aparece nesta lista com o nome e a foto que já mostra para as outras
+          pessoas da sala. Nada mais: nem endereço, nem conta, nem o que está sendo mostrado na
+          tela.
+        </p>
+        <p class="apagado">
+          <a href="/">Site</a> · <a href="/privacidade">Privacidade</a> ·
+          <a href="/termos">Termos</a>
+        </p>
+      </footer>
+    </div>
+
+    <script src="/servidor.js?v=2"></script>
+  </body>
+</html>
