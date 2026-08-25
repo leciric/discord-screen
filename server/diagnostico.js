@@ -115,6 +115,10 @@ export function registrarRelato({ sala, peer, slot, nome = null, via = 'relay', 
     // manda quem investiga adivinhar entre H.264, VP9 e VP8 — e a resposta
     // muda completamente o que se conserta.
     codec: typeof saude.codec === 'string' ? saude.codec.slice(0, 32) : null,
+    // Quantas vezes aquele espectador teve de pular para o vivo. Sobe junto de
+    // "a rede daquela pessoa nao entrega no ritmo", e e o unico numero que
+    // enxerga a fila que o `bufferedAmount` do servidor nao ve.
+    pulos: inteiro(saude.pulos),
     em: agora,
   };
 
@@ -134,8 +138,21 @@ export function registrarRelato({ sala, peer, slot, nome = null, via = 'relay', 
     // O codec entra no texto, e não só nos dados: quem lê o log corrido precisa
     // ver "sem-decodificador (vp09…)" sem ter de abrir a linha.
     const porque = atual.codec ? ` (${atual.codec})` : '';
-    registrar(nivel, 'cliente', `[room ${sala}] ${quem} · tela ${slot}: ${atual.estado}${porque}`, {
+    const texto = `[room ${sala}] ${quem} · tela ${slot}: ${atual.estado}${porque}`;
+    // Vai para o terminal também, e não só para o anel do painel.
+    //
+    // O anel mora na memória do processo e só sai pela API do painel, que exige
+    // sessão de administrador. Quem está com `pm2 logs` aberto — ou lendo o log
+    // depois que o problema passou, que é o caso mais comum — não via nada
+    // disto. E é justamente a linha que explica os outros logs todos.
+    //
+    // `process.stdout.write` e não `console.log`: o console está espelhado para
+    // o anel (ver `derivarConsole`), e chamá-lo aqui gravaria a mesma linha duas
+    // vezes — uma pelo `registrar` abaixo e outra pelo espelho.
+    process.stdout.write(`${texto}\n`);
+    registrar(nivel, 'cliente', texto, {
       codec: atual.codec,
+      pulos: atual.pulos,
       via: atual.via,
       fps: atual.fps,
       lag: atual.lag,

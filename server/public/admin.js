@@ -748,6 +748,9 @@ function renderClientes(data) {
     linha.append(el('td', 'num', String(c.decode)));
     linha.append(el('td', 'num', String(c.resync)));
     linha.append(el('td', 'num', String(c.largados)));
+    const pulos = el('td', 'num', String(c.pulos ?? 0));
+    if ((c.pulos ?? 0) > 0) pulos.style.color = 'var(--warn)';
+    linha.append(pulos);
     return linha;
   });
 

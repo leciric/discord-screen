@@ -2358,6 +2358,15 @@ function openStream(slot, userId) {
       s.started = true;
       renderGrid();
     },
+    // Ficou longe demais do vivo. O player já largou a fila e esqueceu a
+    // referência de tempo; o que falta é o que só daqui se alcança — pedir a
+    // imagem de novo, que é o que traz o keyframe para recomeçar.
+    onAtrasado: (ms) => {
+      console.warn(
+        `[player] ${Math.round(ms / 100) / 10}s atrás do vivo — pulando para o presente`,
+      );
+      repedirImagem(slot);
+    },
   });
 
   streams.set(slot, s);

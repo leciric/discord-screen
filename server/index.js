@@ -11,6 +11,7 @@ import { signToken, verifyToken } from './tokens.js';
 import * as R from './rooms.js';
 import { systemSnapshot, startSampling } from './system.js';
 import { buildAdminDashboard } from './admin.js';
+import { montarEstadoPublico } from './publico.js';
 import * as EV from './eventos.js';
 import * as DIAG from './diagnostico.js';
 import { PORTA_PADRAO, LOCAL_PADRAO } from '../shared/porta.js';
@@ -29,6 +30,7 @@ const {
   PUBLIC_ORIGIN: ORIGEM_CRUA = LOCAL_PADRAO,
   PORT = PORTA_PADRAO,
   NODE_ENV = 'development',
+  PUBLIC_STATUS = 'on',
 } = process.env;
 
 // Uma barra sobrando no fim se propaga: o shareUrl vira "//share.html" e o
@@ -1116,6 +1118,47 @@ app.get('/api/config', (_req, res) => {
   // || e nao ??: uma variavel vazia no .env chega como string vazia, e o
   // contrato aqui e "null significa nao configurado".
   res.json({ clientId: DISCORD_CLIENT_ID || null, asset });
+});
+
+/**
+ * O que está acontecendo no servidor, para quem não tem login de dono.
+ *
+ * A página `/servidor` come daqui. Vale dizer por que ela existe ao lado de um
+ * painel que já mostra tudo isso: o painel pede a conta certa e responde "o que
+ * está quebrado"; esta rota é aberta e responde "tem gente aí?". A segunda
+ * pergunta é de quem chega no site, e antes dela a única resposta que existia
+ * era o lobby do próprio canal — que, para quem abre o endereço sozinho, é uma
+ * lista vazia e nenhuma pista de que o resto do servidor existe.
+ *
+ * `PUBLIC_STATUS=off` desliga a rota e a página juntas, para quem hospeda e não
+ * quer os nomes de quem está online visíveis sem login.
+ */
+const MOSTRAR_STATUS = !/^(off|0|false|nao|não)$/i.test(String(PUBLIC_STATUS).trim());
+
+/**
+ * Um segundo de cache, compartilhado por todo mundo que pedir.
+ *
+ * Diferente do painel, esta rota não tem porteiro: o custo dela é o de varrer
+ * todas as salas, e sem cache basta uma aba em laço para transformar uma página
+ * de status em carga. Um segundo é curto o bastante para a página continuar
+ * parecendo ao vivo — ela pede a cada quatro — e longo o bastante para o custo
+ * não depender de quantas abas estão abertas.
+ */
+let cachePublico = { em: 0, corpo: null };
+
+app.get('/api/publico', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  if (!MOSTRAR_STATUS) return res.status(404).json({ ok: false, error: 'desligado' });
+
+  const agora = Date.now();
+  if (!cachePublico.corpo || agora - cachePublico.em >= 1000) {
+    cachePublico = {
+      em: agora,
+      corpo: montarEstadoPublico({ roomState: R.adminStats(), instanciaWeb: WEB_INSTANCE }),
+    };
+  }
+
+  res.json(cachePublico.corpo);
 });
 
 // Activity buildada (produção). Em dev o Vite serve o client na 5173.

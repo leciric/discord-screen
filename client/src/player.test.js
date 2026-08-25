@@ -380,3 +380,85 @@ describe('saude', () => {
     expect(p.getSaude().decoder).toBe('ausente');
   });
 });
+
+/**
+ * O atraso que ninguem no caminho consegue ver.
+ *
+ * O freio do relay decide pelo `bufferedAmount` do socket daquele espectador, e
+ * ele so conta o que ainda nao foi entregue ao sistema operacional. Medido com
+ * um espectador que nao le nada: o servidor ja tinha mandado 3,1 MB quando o
+ * `bufferedAmount` marcava 0,5 MB — 2,6 MB invisiveis no kernel e na rede, uns
+ * cinco segundos de video a 4 Mb/s.
+ *
+ * Como o servidor nao pode ver, quem ve e quem recebe: o carimbo de envio vem
+ * dentro do pacote. Isto testa que o player age nisso em vez de reproduzir o
+ * passado com um ritmo lindo.
+ */
+describe('pulo para o vivo', () => {
+  /** Um pacote carimbado como enviado ha `atrasoMs`. */
+  function atrasado(tipo, tsMs, atrasoMs) {
+    const buffer = new ArrayBuffer(20);
+    const view = new DataView(buffer);
+    view.setUint8(0, 0);
+    view.setUint8(1, tipo);
+    view.setFloat64(2, tsMs * 1000);
+    view.setFloat64(10, Date.now() - atrasoMs);
+    return buffer;
+  }
+
+  it('um pico isolado nao vale o solavanco', () => {
+    const onAtrasado = vi.fn();
+    const p = createPlayer(canvasFalso(), { onAtrasado });
+    p.start({ codec: 'vp8', codedWidth: 1280, codedHeight: 720 });
+
+    p.push(atrasado(KEYFRAME, 0, 30_000));
+
+    expect(onAtrasado).not.toHaveBeenCalled();
+  });
+
+  it('atraso que persiste dispara o pulo', async () => {
+    const onAtrasado = vi.fn();
+    const p = createPlayer(canvasFalso(), { onAtrasado });
+    p.start({ codec: 'vp8', codedWidth: 1280, codedHeight: 720 });
+
+    // O relogio de `Date.now` e o que decide a persistencia, entao ele anda.
+    const real = Date.now;
+    let t = real();
+    Date.now = () => t;
+    p.push(atrasado(KEYFRAME, 0, 30_000));
+    t += 5000;
+    p.push(atrasado(DELTA, 33, 30_000));
+    Date.now = real;
+
+    expect(onAtrasado).toHaveBeenCalledTimes(1);
+    expect(onAtrasado.mock.calls[0][0]).toBeGreaterThan(3000);
+  });
+
+  it('atraso normal nao dispara nada', () => {
+    const onAtrasado = vi.fn();
+    const p = createPlayer(canvasFalso(), { onAtrasado });
+    p.start({ codec: 'vp8', codedWidth: 1280, codedHeight: 720 });
+
+    p.push(atrasado(KEYFRAME, 0, 120));
+    p.push(atrasado(DELTA, 33, 90));
+
+    expect(onAtrasado).not.toHaveBeenCalled();
+    expect(p.getSaude().pulos).toBe(0);
+  });
+
+  it('conta os pulos, que e o numero que acusa a rede daquela pessoa', () => {
+    const onAtrasado = vi.fn();
+    const p = createPlayer(canvasFalso(), { onAtrasado });
+    p.start({ codec: 'vp8', codedWidth: 1280, codedHeight: 720 });
+
+    const real = Date.now;
+    let t = real();
+    Date.now = () => t;
+    p.push(atrasado(KEYFRAME, 0, 30_000));
+    t += 5000;
+    p.push(atrasado(DELTA, 33, 30_000));
+    Date.now = real;
+
+    expect(p.getSaude().pulos).toBe(1);
+  });
+});

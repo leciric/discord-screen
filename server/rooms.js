@@ -1814,6 +1814,10 @@ export function adminStats() {
     return {
       id: room.id,
       name: room.name,
+      // Quem abriu a sala. O painel mostra porque "de quem é esta sala" é a
+      // primeira pergunta de quem vai mexer nela, e a lista pública mostra
+      // pelo mesmo motivo que o lobby sempre mostrou.
+      ownerName: room.ownerName ?? null,
       instance: room.instance,
       guildId: room.guildId ?? null,
       guildName: room.guildName ?? null,

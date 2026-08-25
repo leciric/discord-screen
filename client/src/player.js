@@ -101,7 +101,48 @@ const AJUSTE_MS = 2000;
 /** Correção máxima por ajuste: acima disso a mudança de ritmo se vê. */
 const PASSO_MAX_MS = 15;
 
-export function createPlayer(canvas, { onError, onTamanho } = {}) {
+/**
+ * Atraso a partir do qual não vale mais a pena continuar de onde se está.
+ *
+ * Existe porque há uma fila neste caminho que NINGUÉM consegue ver, e ela é
+ * real — medida, não suposta. O freio do relay decide pelo `bufferedAmount` do
+ * socket daquele espectador, e `bufferedAmount` só conta o que ainda não foi
+ * entregue ao sistema operacional. Medindo com um espectador que não lê nada:
+ * o servidor já tinha mandado 3,1 MB quando o `bufferedAmount` ainda marcava
+ * 0,5 MB — quase 2,6 MB estavam no buffer do kernel e na rede, invisíveis.
+ *
+ * A 4 Mb/s isso são uns cinco segundos de vídeo que o teto de meio segundo do
+ * relay não tem como enxergar: ele acha que está tudo bem, e quem assiste está
+ * cinco segundos no passado. Numa rede de verdade, com mais latência, a janela
+ * é maior.
+ *
+ * Como o servidor não pode ver, quem vê é quem recebe: o carimbo de envio vem
+ * dentro de cada pacote, e a distância entre ele e o relógio de agora é o
+ * atraso real. Passando disso, o certo é pular para o vivo — largar o que está
+ * na fila e pedir a imagem de novo — em vez de reproduzir o passado com um
+ * ritmo lindo.
+ *
+ * Três segundos: muito acima dos 80 ms de buffer somados a qualquer rede ruim,
+ * e bem abaixo do que alguém tolera antes de chamar de travado.
+ */
+const ATRASO_MAX_MS = 3000;
+
+/**
+ * Por quanto tempo o atraso precisa se manter antes de valer o solavanco.
+ *
+ * O carimbo de envio vem do relógio de OUTRA máquina, e relógio de máquina
+ * alheia erra — um desvio de alguns segundos entre dois computadores é comum e
+ * não significa atraso nenhum. Um pico isolado também não: pode ser uma rajada
+ * que a fila absorve sozinha no quadro seguinte.
+ *
+ * Exigir persistência não conserta o desvio de relógio (nada aqui conserta),
+ * mas garante que o preço de errar seja pago no máximo uma vez: depois do
+ * pulo, o atraso medido continua o mesmo se era desvio, e aí `ressincronizou`
+ * para de subir porque a marca só é rearmada quando o atraso cai.
+ */
+const ATRASO_PERSISTE_MS = 4000;
+
+export function createPlayer(canvas, { onError, onTamanho, onAtrasado } = {}) {
   const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
 
   let decoder = null;
@@ -114,6 +155,12 @@ export function createPlayer(canvas, { onError, onTamanho } = {}) {
   // "a rede está ruim" de "esta máquina não está dando conta".
   let ressincronizacoes = 0;
   let largadosNoDecode = 0;
+  // Desde quando o atraso está acima do teto. `null` enquanto está sob controle.
+  // Ver ATRASO_MAX_MS: é o relógio que decide quando pular para o vivo.
+  let atrasadoDesde = null;
+  // Quantas vezes já se pulou para o vivo. Sobe junto de "a rede daquela pessoa
+  // não está entregando no ritmo", e é o número que separa isso de tudo o mais.
+  let pulosParaOVivo = 0;
   // Total de quadros desenhados desde o start. Separado de `framesDrawn`
   // porque aquele é zerado por quem lê (o painel mostra "por segundo"), e um
   // contador que zera não serve para o vigia perguntar "andou desde a última
@@ -202,6 +249,7 @@ export function createPlayer(canvas, { onError, onTamanho } = {}) {
     const timestamp = view.getFloat64(2);
     const sentAt = view.getFloat64(10);
     lastLagMs = Date.now() - sentAt;
+    vigiarAtraso();
 
     try {
       decoder.decode(
@@ -216,6 +264,42 @@ export function createPlayer(canvas, { onError, onTamanho } = {}) {
       console.warn('[decode]', err.message);
       needKeyframe = true;
     }
+  }
+
+  /**
+   * Ficou longe demais do vivo? Então pula, em vez de reproduzir o passado.
+   *
+   * Este é o único lugar do caminho que consegue ver o atraso de ponta a ponta.
+   * O relay decide pelo `bufferedAmount`, que não enxerga o que já foi entregue
+   * ao kernel — e são segundos de vídeo. Quem recebe tem o carimbo de envio
+   * dentro do pacote, e daqui a conta fecha.
+   *
+   * O pulo é o mesmo remédio do resto do arquivo: larga a fila e esquece a
+   * referência de tempo. O primeiro quadro que chegar depois disso reancora
+   * tudo, e a imagem volta ao presente com um solavanco só — que é muito melhor
+   * do que um minuto de passado perfeitamente cadenciado.
+   */
+  function vigiarAtraso() {
+    if (lastLagMs <= ATRASO_MAX_MS) {
+      atrasadoDesde = null;
+      return;
+    }
+
+    const agora = Date.now();
+    atrasadoDesde ??= agora;
+    if (agora - atrasadoDesde < ATRASO_PERSISTE_MS) return;
+
+    atrasadoDesde = null;
+    pulosParaOVivo++;
+    esvaziar();
+    base = null;
+    ultimoTs = -Infinity;
+    // Sem keyframe o decodificador não tem de onde recomeçar: a cadeia de
+    // referência ficou toda na fila que acabou de ser jogada fora.
+    needKeyframe = true;
+    // Quem chamou decide como pedir a imagem de novo — o player não conhece
+    // sala, slot nem socket, e não vai passar a conhecer por causa disto.
+    onAtrasado?.(Math.round(lastLagMs));
   }
 
   /**
@@ -378,6 +462,8 @@ export function createPlayer(canvas, { onError, onTamanho } = {}) {
     ressincronizacoes = 0;
     largadosNoDecode = 0;
     desenhadosTotal = 0;
+    pulosParaOVivo = 0;
+    atrasadoDesde = null;
     // `codecTentado` NÃO é zerado aqui de propósito: `start()` chama `stop()`
     // antes de tentar, e zerar apagaria justamente o nome do codec que acabou
     // de ser recusado — que é a única informação útil nesse momento.
@@ -427,6 +513,7 @@ export function createPlayer(canvas, { onError, onTamanho } = {}) {
     return {
       codec: codecTentado,
       desenhados: desenhadosTotal,
+      pulos: pulosParaOVivo,
       fila: fila.length,
       decode: decoder?.decodeQueueSize ?? 0,
       resync: ressincronizacoes,
