@@ -18,7 +18,7 @@ import {
   supportError,
   fonteIndisponivel,
   opcoesTela,
-} from '/shared/broadcaster.js?v=8';
+} from '/shared/broadcaster.js?v=9';
 import { criarCamada, conter } from '/shared/anotacoes.js?v=3';
 import { criarFlutuante, flutuarDisponivel } from '/shared/flutuar.js?v=1';
 import { criarEstudio } from '/shared/estudio.js?v=1';

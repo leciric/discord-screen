@@ -152,6 +152,7 @@ let sockets = [];
 let processadores = new Map();
 let capturas = [];
 let capturasPreparadas = [];
+let peers = [];
 
 class VideoEncoderFalso {
   constructor({ output, error }) {
@@ -237,6 +238,63 @@ class SocketFalso {
 }
 SocketFalso.OPEN = 1;
 
+/**
+ * RTCPeerConnection de mentira.
+ *
+ * O broadcaster nao negocia nada sozinho — ele pendura as faixas, pede a
+ * oferta e repassa o que chega. E esse encadeamento que este duble permite
+ * observar, sem precisar de dois navegadores conversando de verdade.
+ */
+class PeerFalso {
+  constructor(config) {
+    this.config = config;
+    this.ouvintes = new Map();
+    this.faixas = [];
+    this.remotas = [];
+    this.candidatos = [];
+    this.senders = [];
+    this.fechado = false;
+    this.localDescription = null;
+    peers.push(this);
+  }
+  addEventListener(nome, fn) {
+    this.ouvintes.set(nome, fn);
+  }
+  disparar(nome, evento) {
+    this.ouvintes.get(nome)?.(evento);
+  }
+  addTrack(track, stream) {
+    this.faixas.push({ track, stream });
+    const sender = {
+      track,
+      getParameters: () => ({ encodings: [{}] }),
+      setParameters: async () => {},
+      substituidas: [],
+      replaceTrack: async (nova) => sender.substituidas.push(nova),
+    };
+    this.senders.push(sender);
+    return sender;
+  }
+  getSenders() {
+    return this.senders;
+  }
+  async createOffer() {
+    return { type: 'offer', sdp: 'v=0 oferta' };
+  }
+  async setLocalDescription(d) {
+    this.localDescription = d;
+  }
+  async setRemoteDescription(d) {
+    this.remotas.push(d);
+  }
+  async addIceCandidate(c) {
+    this.candidatos.push(c);
+  }
+  close() {
+    this.fechado = true;
+  }
+}
+
 class VideoFrameFalso {
   constructor(fonte, { timestamp } = {}) {
     this.displayWidth = fonte?.width ?? 0;
@@ -309,6 +367,13 @@ function montarNavegador({ sem = [], restrictOwnAudio = true } = {}) {
   vi.stubGlobal('AudioEncoder', window.AudioEncoder);
   vi.stubGlobal('MediaStreamTrackProcessor', window.MediaStreamTrackProcessor);
   vi.stubGlobal('WebSocket', SocketFalso);
+  vi.stubGlobal('RTCPeerConnection', tem('RTCPeerConnection') ? PeerFalso : undefined);
+  // A lista de servidores ICE vem do servidor. `iceServers` a guarda numa
+  // promessa de modulo, entao esta resposta vale para o arquivo inteiro.
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => ({ ok: true, json: async () => ({ iceServers: [{ urls: 'stun:t' }] }) })),
+  );
 }
 
 const telaSimples = (settings = { width: 1280, height: 720, displaySurface: 'monitor' }) =>
@@ -340,6 +405,7 @@ beforeEach(() => {
   processadores = new Map();
   capturas = [];
   capturasPreparadas = [];
+  peers = [];
   VideoEncoderFalso.isConfigSupported.mockClear();
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -1028,6 +1094,186 @@ describe('fila do encoder', () => {
     await respirar();
 
     expect(contexto.encoder.codificados).toHaveLength(1);
+  });
+});
+
+describe('conexão direta', () => {
+  /** Empurra um quadro e deixa o encoder respirar. */
+  async function umQuadro(contexto) {
+    processadorDe(contexto.stream.getVideoTracks()[0]).empurrar(quadro());
+    await respirar();
+  }
+
+  /**
+   * Faz o encoder anunciar a config, que é o que libera a pausa do relay.
+   *
+   * Antes do primeiro config o transmissor se recusa a parar: o servidor guarda
+   * essa config para entregar a quem chegar depois, e pausar antes de mandá-la
+   * deixaria o próximo espectador sem como montar o decodificador.
+   */
+  function anunciarConfig(contexto) {
+    contexto.encoder.output(chunkFalso(), {
+      decoderConfig: { codec: H264, codedWidth: 1280, codedHeight: 720 },
+    });
+  }
+
+  it('abre um peer e oferece quando o servidor apresenta um espectador', async () => {
+    // Quem tem a mídia é quem oferece: uma oferta feita por quem só recebe
+    // teria que descrever faixas que ela não tem.
+    const { ws } = await noAr();
+    ws.receber({ type: 'rtc-want', peer: 'p1' });
+    await respirar(8);
+
+    expect(peers).toHaveLength(1);
+    expect(peers[0].faixas).toHaveLength(1);
+    expect(ws.mensagens()).toContainEqual({
+      type: 'rtc',
+      peer: 'p1',
+      payload: { kind: 'offer', sdp: { type: 'offer', sdp: 'v=0 oferta' } },
+    });
+  });
+
+  it('repassa o candidato local para o espectador certo', async () => {
+    const { ws } = await noAr();
+    ws.receber({ type: 'rtc-want', peer: 'p1' });
+    await respirar(8);
+
+    peers[0].disparar('icecandidate', { candidate: { toJSON: () => ({ candidate: 'c1' }) } });
+
+    expect(ws.mensagens()).toContainEqual({
+      type: 'rtc',
+      peer: 'p1',
+      payload: { kind: 'ice', candidate: { candidate: 'c1' } },
+    });
+  });
+
+  it('não abre dois peers para o mesmo espectador', async () => {
+    const { ws } = await noAr();
+    ws.receber({ type: 'rtc-want', peer: 'p1' });
+    await respirar(8);
+    ws.receber({ type: 'rtc-want', peer: 'p1' });
+    await respirar(8);
+
+    expect(peers).toHaveLength(1);
+  });
+
+  it('ignora o convite sem nome', async () => {
+    const { ws } = await noAr();
+    ws.receber({ type: 'rtc-want' });
+    await respirar(8);
+
+    expect(peers).toHaveLength(0);
+  });
+
+  it('não tenta conexão direta onde o navegador não tem WebRTC', async () => {
+    // O relay continua entregando; é para isso que ele nunca foi desligado.
+    montarNavegador({ sem: ['RTCPeerConnection'] });
+    const { ws } = await noAr();
+    ws.receber({ type: 'rtc-want', peer: 'p1' });
+    await respirar(8);
+
+    expect(peers).toHaveLength(0);
+    expect(ws.mensagens().some((m) => m.type === 'rtc')).toBe(false);
+  });
+
+  it('aplica a resposta que volta do espectador', async () => {
+    const { ws } = await noAr();
+    ws.receber({ type: 'rtc-want', peer: 'p1' });
+    await respirar(8);
+
+    ws.receber({ type: 'rtc', peer: 'p1', payload: { kind: 'answer', sdp: { type: 'answer' } } });
+    await respirar(4);
+
+    expect(peers[0].remotas).toEqual([{ type: 'answer' }]);
+  });
+
+  it('aplica o candidato que vem do espectador', async () => {
+    const { ws } = await noAr();
+    ws.receber({ type: 'rtc-want', peer: 'p1' });
+    await respirar(8);
+
+    ws.receber({
+      type: 'rtc',
+      peer: 'p1',
+      payload: { kind: 'ice', candidate: { candidate: 'c' } },
+    });
+    await respirar(4);
+
+    expect(peers[0].candidatos).toEqual([{ candidate: 'c' }]);
+  });
+
+  it('ignora sinalização endereçada a um peer que não existe', async () => {
+    const { ws } = await noAr();
+
+    ws.receber({ type: 'rtc', peer: 'fantasma', payload: { kind: 'answer', sdp: {} } });
+    await respirar(4);
+
+    expect(peers).toHaveLength(0);
+  });
+
+  it('fecha o peer quando o espectador vai embora', async () => {
+    const { ws } = await noAr();
+    ws.receber({ type: 'rtc-want', peer: 'p1' });
+    await respirar(8);
+
+    ws.receber({ type: 'rtc-bye', peer: 'p1' });
+    await respirar();
+
+    expect(peers[0].fechado).toBe(true);
+  });
+
+  it('fecha os peers quando a transmissão acaba', async () => {
+    const { b, ws } = await noAr();
+    ws.receber({ type: 'rtc-want', peer: 'p1' });
+    await respirar(8);
+
+    b.stop();
+
+    expect(peers[0].fechado).toBe(true);
+  });
+
+  it('para de subir quadros quando ninguém mais depende do relay', async () => {
+    const contexto = await noAr();
+    await umQuadro(contexto);
+    anunciarConfig(contexto);
+    const antes = contexto.encoder.codificados.length;
+    expect(antes).toBeGreaterThan(0);
+
+    // O servidor só manda isto quando todo espectador está na conexão direta.
+    contexto.ws.receber({ type: 'chunks', on: false });
+    await umQuadro(contexto);
+    await umQuadro(contexto);
+
+    expect(contexto.encoder.codificados).toHaveLength(antes);
+  });
+
+  it('volta a subir quadros assim que alguém precisa do relay de novo', async () => {
+    const contexto = await noAr();
+    await umQuadro(contexto);
+    anunciarConfig(contexto);
+    contexto.ws.receber({ type: 'chunks', on: false });
+    await umQuadro(contexto);
+    const parado = contexto.encoder.codificados.length;
+
+    contexto.ws.receber({ type: 'chunks', on: true });
+    await umQuadro(contexto);
+
+    expect(contexto.encoder.codificados.length).toBeGreaterThan(parado);
+  });
+
+  it('troca a faixa dos peers sem renegociar quando a tela muda', async () => {
+    // replaceTrack não mexe no SDP: quem assiste segue na mesma conexão e só
+    // vê a imagem mudar. Renegociar custaria um ICE novo por espectador.
+    const { b, ws } = await noAr();
+    ws.receber({ type: 'rtc-want', peer: 'p1' });
+    await respirar(8);
+
+    prepararCaptura(telaSimples());
+    await b.changeScreen();
+    await respirar(4);
+
+    expect(peers[0].senders[0].substituidas).toHaveLength(1);
+    expect(peers[0].fechado).toBe(false);
   });
 });
 

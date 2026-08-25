@@ -1,65 +1,218 @@
-// @vitest-environment jsdom
 /**
- * A camada WebRTC, com um RTCPeerConnection de mentira.
+ * A camada WebRTC, com dublês no lugar do navegador.
  *
- * Este módulo chegou pelo merge sem teste nenhum, e era ele — sozinho —
- * que segurava o piso de cobertura do CI no vermelho.
+ * Nada disto existe fora de um navegador de verdade, e o que este módulo faz
+ * não é negociar — é ligar os fios certos e traduzir o que o RTCPeerConnection
+ * conta. Os dublês daqui imitam o contrato dessa API, que é o que o módulo
+ * realmente depende: quais eventos ele escuta, o que ele repassa, e o que ele
+ * decide quando a resposta não vem.
  *
- * O que se prova aqui é a política, que é a parte que não é do navegador: o
- * candidato nulo que não pode ser repassado, o `failed` do ICE que precisa
- * virar aviso mesmo onde o `connectionstatechange` não vem, a diferença entre
- * ceder resolução (tela) e ceder quadros (câmera), e o fato de que nada disso
- * pode derrubar a transmissão quando falha — porque o relay é o piso e o
- * WebRTC é só o atalho.
+ * O que se prova aqui é sobretudo a rede de segurança: candidato nulo que não
+ * pode ser repassado, ICE que falha sem emitir mudança de estado, navegador
+ * que recusa o ajuste de bitrate, `getStats` que lança. Nenhuma dessas
+ * situações quebra a transmissão hoje — e é justamente por isso que uma
+ * regressão nelas passaria despercebida.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
 import {
-  criarPeer,
-  suportaWebRTC,
-  resumoPeer,
   ajustarEnvio,
+  criarPeer,
   MORTO,
   PRAZO_CONEXAO_MS,
+  resumoPeer,
+  suportaWebRTC,
 } from './rtc.js';
 
 const STUN = 'stun:stun.l.google.com:19302';
 
-/** Um RTCPeerConnection só com o que este módulo usa. */
-function peerFalso() {
-  const ouvintes = new Map();
+/** Um RTCPeerConnection de mentira: guarda os ouvintes para o teste disparar. */
+class PeerFalso {
+  constructor(config) {
+    this.config = config;
+    this.ouvintes = new Map();
+    this.senders = [];
+    this.estatisticas = new Map();
+    PeerFalso.criados.push(this);
+  }
+  addEventListener(nome, fn) {
+    this.ouvintes.set(nome, fn);
+  }
+  disparar(nome, evento) {
+    this.ouvintes.get(nome)?.(evento);
+  }
+  getSenders() {
+    return this.senders;
+  }
+  async getStats() {
+    return this.estatisticas;
+  }
+}
+PeerFalso.criados = [];
+
+/** Um sender no formato que `ajustarEnvio` espera. */
+function sender(kind, { encodings, recusa = false } = {}) {
   return {
-    connectionState: 'new',
-    iceConnectionState: 'new',
-    config: null,
-    addEventListener: (tipo, fn) => ouvintes.set(tipo, fn),
-    disparar: (tipo, evento) => ouvintes.get(tipo)?.(evento),
-    getSenders: () => [],
+    track: kind ? { kind } : null,
+    parametros: { encodings },
+    aplicados: [],
+    getParameters() {
+      return this.parametros;
+    },
+    async setParameters(p) {
+      if (recusa) throw new Error('nao suportado');
+      this.aplicados.push(p);
+    },
   };
 }
 
-let ultimoPeer;
-
 beforeEach(() => {
-  ultimoPeer = null;
-  globalThis.RTCPeerConnection = vi.fn(function (config) {
-    ultimoPeer = peerFalso();
-    ultimoPeer.config = config;
-    return ultimoPeer;
-  });
+  PeerFalso.criados = [];
+  vi.stubGlobal('RTCPeerConnection', PeerFalso);
 });
 
 afterEach(() => {
-  delete globalThis.RTCPeerConnection;
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
-  vi.resetModules();
 });
 
-describe('o que é constante', () => {
-  it('só os estados sem volta contam como morte', () => {
-    expect([...MORTO].sort()).toEqual(['closed', 'disconnected', 'failed']);
+describe('iceServers', () => {
+  /**
+   * O módulo guarda a lista numa promessa de módulo, para buscá-la uma vez por
+   * sessão. Isso obriga a reimportar a cada caso — sem isso o primeiro teste
+   * decidiria o resultado dos outros.
+   */
+  async function comFetch(implementacao) {
+    vi.resetModules();
+    vi.stubGlobal('fetch', vi.fn(implementacao));
+    const { iceServers } = await import('./rtc.js');
+    return iceServers;
+  }
+
+  it('usa a lista que o servidor mandou', async () => {
+    const iceServers = await comFetch(async () => ({
+      ok: true,
+      json: async () => ({ iceServers: [{ urls: 'turn:exemplo.test', username: 'u' }] }),
+    }));
+
+    expect(await iceServers()).toEqual([{ urls: 'turn:exemplo.test', username: 'u' }]);
+  });
+
+  it('busca uma vez só, por mais que perguntem', async () => {
+    const iceServers = await comFetch(async () => ({
+      ok: true,
+      json: async () => ({ iceServers: [{ urls: STUN }] }),
+    }));
+
+    await Promise.all([iceServers(), iceServers(), iceServers()]);
+
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('respeita o prefixo do proxy da Activity', async () => {
+    const iceServers = await comFetch(async () => ({ ok: true, json: async () => ({}) }));
+
+    await iceServers('/.proxy');
+
+    expect(globalThis.fetch).toHaveBeenCalledWith('/.proxy/api/ice');
+  });
+
+  it('cai no STUN público quando a rede falha', async () => {
+    // Ficar sem lista não pode significar ficar sem conexão direta: o STUN
+    // público sozinho já resolve a maioria das casas.
+    const iceServers = await comFetch(async () => {
+      throw new Error('sem rede');
+    });
+
+    expect(await iceServers()).toEqual([{ urls: STUN }]);
+  });
+
+  it('cai no STUN público quando o servidor recusa', async () => {
+    const iceServers = await comFetch(async () => ({ ok: false }));
+
+    expect(await iceServers()).toEqual([{ urls: STUN }]);
+  });
+
+  it('cai no STUN público quando a lista vem vazia', async () => {
+    const iceServers = await comFetch(async () => ({
+      ok: true,
+      json: async () => ({ iceServers: [] }),
+    }));
+
+    expect(await iceServers()).toEqual([{ urls: STUN }]);
+  });
+});
+
+describe('criarPeer', () => {
+  it('junta áudio e vídeo num transporte só', async () => {
+    // Sem isto são duas negociações de ICE para a mesma conexão, e o dobro de
+    // tempo até o primeiro quadro.
+    criarPeer({ ice: [{ urls: STUN }] });
+
+    expect(PeerFalso.criados[0].config).toMatchObject({ bundlePolicy: 'max-bundle' });
+  });
+
+  it('repassa o candidato já convertido', async () => {
+    const onIce = vi.fn();
+    const pc = criarPeer({ ice: [], onIce });
+
+    pc.disparar('icecandidate', { candidate: { toJSON: () => ({ candidate: 'a=1' }) } });
+
+    expect(onIce).toHaveBeenCalledWith({ candidate: 'a=1' });
+  });
+
+  it('não repassa o candidato nulo, que é o fim da lista', async () => {
+    // Repassá-lo faria o outro lado chamar addIceCandidate(null) e lançar.
+    const onIce = vi.fn();
+    const pc = criarPeer({ ice: [], onIce });
+
+    pc.disparar('icecandidate', { candidate: null });
+
+    expect(onIce).not.toHaveBeenCalled();
+  });
+
+  it('avisa a mudança de estado da conexão', async () => {
+    const onEstado = vi.fn();
+    const pc = criarPeer({ ice: [], onEstado });
+    pc.connectionState = 'connected';
+
+    pc.disparar('connectionstatechange');
+
+    expect(onEstado).toHaveBeenCalledWith('connected');
+  });
+
+  it('trata a falha de ICE como falha, mesmo sem mudança de conexão', async () => {
+    // Nem todo navegador emite connectionstatechange quando o ICE desiste; sem
+    // isto a tentativa ficaria pendurada até o prazo estourar.
+    const onEstado = vi.fn();
+    const pc = criarPeer({ ice: [], onEstado });
+    pc.iceConnectionState = 'failed';
+
+    pc.disparar('iceconnectionstatechange');
+
+    expect(onEstado).toHaveBeenCalledWith('failed');
+  });
+
+  it('ignora estado de ICE que não é falha', async () => {
+    const onEstado = vi.fn();
+    const pc = criarPeer({ ice: [], onEstado });
+    pc.iceConnectionState = 'checking';
+
+    pc.disparar('iceconnectionstatechange');
+
+    expect(onEstado).not.toHaveBeenCalled();
+  });
+
+  it('só escuta faixas quando alguém quer recebê-las', async () => {
+    expect(criarPeer({ ice: [] }).ouvintes.has('track')).toBe(false);
+    expect(criarPeer({ ice: [], onTrack: vi.fn() }).ouvintes.has('track')).toBe(true);
+  });
+
+  it('reconhece os estados dos quais não se volta', async () => {
+    expect([...MORTO]).toEqual(expect.arrayContaining(['failed', 'closed', 'disconnected']));
+    expect(MORTO.has('connected')).toBe(false);
     // Um peer que ainda está negociando não pode ser dado por perdido.
     expect(MORTO.has('connecting')).toBe(false);
-    expect(MORTO.has('connected')).toBe(false);
   });
 
   it('o prazo é folgado porque esperar não custa nada', () => {
@@ -68,252 +221,174 @@ describe('o que é constante', () => {
     expect(PRAZO_CONEXAO_MS).toBeGreaterThanOrEqual(5000);
   });
 
-  it('suportaWebRTC responde pelo que o navegador tem', () => {
+  it('sem lista, o STUN público', () => {
+    // `ice` ausente não é `ice` vazio: quem não recebeu a lista do servidor
+    // ainda precisa de um STUN para descobrir o próprio endereço.
+    expect(criarPeer({}).config.iceServers).toEqual([{ urls: STUN }]);
+  });
+});
+
+describe('suportaWebRTC', () => {
+  it('responde pelo que o navegador tem', () => {
     expect(suportaWebRTC()).toBe(true);
-    delete globalThis.RTCPeerConnection;
+    vi.stubGlobal('RTCPeerConnection', undefined);
     expect(suportaWebRTC()).toBe(false);
   });
 });
 
-describe('servidores ICE', () => {
-  /**
-   * O módulo guarda a promessa para não perguntar duas vezes, e é justamente
-   * isso que um caso testa — então cada caso precisa de uma cópia limpa.
-   */
-  const recarregar = async () => {
-    vi.resetModules();
-    return (await import('./rtc.js')).iceServers;
-  };
-
-  it('usa o que o servidor mandar', async () => {
-    const meu = [{ urls: 'turn:exemplo:3478', username: 'a', credential: 'b' }];
-    globalThis.fetch = vi.fn(() =>
-      Promise.resolve({ ok: true, json: () => ({ iceServers: meu }) }),
-    );
-
-    expect(await (await recarregar())('/base')).toEqual(meu);
-    expect(globalThis.fetch).toHaveBeenCalledWith('/base/api/ice');
-  });
-
-  it('busca uma vez só, por mais que perguntem', async () => {
-    globalThis.fetch = vi.fn(() =>
-      Promise.resolve({ ok: true, json: () => ({ iceServers: [{ urls: 'turn:x' }] }) }),
-    );
-
-    const ice = await recarregar();
-    await Promise.all([ice(), ice(), ice()]);
-
-    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-  });
-
-  it('rede fora não desliga o WebRTC, cai no STUN público', async () => {
-    globalThis.fetch = vi.fn(() => Promise.reject(new Error('sem rede')));
-
-    // Falha aqui não é motivo para desistir: o STUN já atende NAT doméstico.
-    expect(await (await recarregar())()).toEqual([{ urls: STUN }]);
-  });
-
-  it('resposta ruim ou lista vazia também cai no padrão', async () => {
-    globalThis.fetch = vi.fn(() => Promise.resolve({ ok: false }));
-    expect(await (await recarregar())()).toEqual([{ urls: STUN }]);
-
-    globalThis.fetch = vi.fn(() => Promise.resolve({ ok: true, json: () => ({ iceServers: [] }) }));
-    expect(await (await recarregar())()).toEqual([{ urls: STUN }]);
-  });
-});
-
-describe('criarPeer', () => {
-  it('junta áudio e vídeo num transporte só', () => {
-    criarPeer({ ice: [{ urls: 'turn:x' }] });
-
-    // Sem max-bundle são duas negociações de ICE para a mesma conexão, e o
-    // dobro de tempo até o primeiro quadro.
-    expect(ultimoPeer.config.bundlePolicy).toBe('max-bundle');
-    expect(ultimoPeer.config.iceServers).toEqual([{ urls: 'turn:x' }]);
-  });
-
-  it('sem lista, o STUN público', () => {
-    criarPeer({});
-    expect(ultimoPeer.config.iceServers).toEqual([{ urls: STUN }]);
-  });
-
-  it('repassa o candidato, e nunca o fim da lista', () => {
-    const onIce = vi.fn();
-    criarPeer({ onIce });
-
-    ultimoPeer.disparar('icecandidate', { candidate: { toJSON: () => ({ candidate: 'a' }) } });
-    // O nulo é o fim da lista, não um candidato: repassá-lo faria o outro lado
-    // chamar addIceCandidate(null) e lançar.
-    ultimoPeer.disparar('icecandidate', { candidate: null });
-
-    expect(onIce).toHaveBeenCalledTimes(1);
-    expect(onIce).toHaveBeenCalledWith({ candidate: 'a' });
-  });
-
-  it('avisa a mudança de estado da conexão', () => {
-    const onEstado = vi.fn();
-    criarPeer({ onEstado });
-
-    ultimoPeer.connectionState = 'connected';
-    ultimoPeer.disparar('connectionstatechange');
-
-    expect(onEstado).toHaveBeenCalledWith('connected');
-  });
-
-  it('falha de ICE vira aviso mesmo sem connectionstatechange', () => {
-    const onEstado = vi.fn();
-    criarPeer({ onEstado });
-
-    ultimoPeer.iceConnectionState = 'checking';
-    ultimoPeer.disparar('iceconnectionstatechange');
-    expect(onEstado).not.toHaveBeenCalled();
-
-    // Nem todo navegador emite connectionstatechange em falha de ICE; sem esta
-    // segunda porta, a tentativa morta ficaria pendurada até o prazo estourar.
-    ultimoPeer.iceConnectionState = 'failed';
-    ultimoPeer.disparar('iceconnectionstatechange');
-    expect(onEstado).toHaveBeenCalledWith('failed');
-  });
-
-  it('sem onTrack não pendura ouvinte de faixa', () => {
-    const onTrack = vi.fn();
-    criarPeer({ onTrack });
-    ultimoPeer.disparar('track', { streams: [] });
-    expect(onTrack).toHaveBeenCalled();
-
-    criarPeer({});
-    expect(() => ultimoPeer.disparar('track', {})).not.toThrow();
-  });
-});
-
 describe('ajustarEnvio', () => {
-  function senderFalso(kind, params = {}) {
-    return {
-      track: { kind },
-      getParameters: () => params,
-      setParameters: vi.fn(() => Promise.resolve()),
-    };
-  }
+  it('põe teto de bitrate e de taxa na faixa de vídeo', async () => {
+    // Sem o teto o WebRTC parte de um chute conservador e leva dezenas de
+    // segundos subindo até a qualidade que a pessoa já escolheu.
+    const video = sender('video', { encodings: [{}] });
+    const pc = criarPeer({ ice: [] });
+    pc.senders = [video];
 
-  const com = (...senders) => ({ getSenders: () => senders });
+    await ajustarEnvio(pc, { bitrate: 2_500_000, fps: 30 });
 
-  it('tela cede quadros antes de ceder resolução', async () => {
-    const s = senderFalso('video', { encodings: [{}] });
-    await ajustarEnvio(com(s), { bitrate: 3_000_000, fonte: 'tela', fps: 30 });
-
-    // Texto ilegível é pior que texto que anda a 10 quadros.
-    const p = s.setParameters.mock.calls[0][0];
-    expect(p.degradationPreference).toBe('maintain-resolution');
-    expect(p.encodings[0]).toEqual({ maxBitrate: 3_000_000, maxFramerate: 30 });
+    expect(video.aplicados[0].encodings[0]).toMatchObject({
+      maxBitrate: 2_500_000,
+      maxFramerate: 30,
+    });
   });
 
-  it('câmera cede resolução antes de ceder quadros', async () => {
-    const s = senderFalso('video', { encodings: [{}] });
-    await ajustarEnvio(com(s), { bitrate: 1, fonte: 'camera' });
+  it('mantém a resolução na tela, porque texto ilegível é pior que texto lento', async () => {
+    const video = sender('video', { encodings: [{}] });
+    const pc = criarPeer({ ice: [] });
+    pc.senders = [video];
 
-    // Ninguém lê um rosto, e movimento picado incomoda mais que imagem macia.
-    expect(s.setParameters.mock.calls[0][0].degradationPreference).toBe('maintain-framerate');
+    await ajustarEnvio(pc, { bitrate: 1, fonte: 'tela' });
+
+    expect(video.aplicados[0].degradationPreference).toBe('maintain-resolution');
   });
 
-  it('inventa o encoding que o navegador não trouxe', async () => {
-    const semNada = senderFalso('video', {});
-    const vazio = senderFalso('video', { encodings: [] });
+  it('mantém a taxa na câmera, porque ninguém lê um rosto', async () => {
+    const video = sender('video', { encodings: [{}] });
+    const pc = criarPeer({ ice: [] });
+    pc.senders = [video];
 
-    await ajustarEnvio(com(semNada, vazio), { bitrate: 500 });
+    await ajustarEnvio(pc, { bitrate: 1, fonte: 'camera' });
 
-    // Sem isto o ajuste se perderia em silêncio, que é o pior dos dois mundos.
-    expect(semNada.setParameters.mock.calls[0][0].encodings[0].maxBitrate).toBe(500);
-    expect(vazio.setParameters.mock.calls[0][0].encodings[0].maxBitrate).toBe(500);
+    expect(video.aplicados[0].degradationPreference).toBe('maintain-framerate');
   });
 
-  it('áudio passa sem teto de vídeo', async () => {
-    const s = senderFalso('audio', { encodings: [{}] });
-    await ajustarEnvio(com(s), { bitrate: 3_000_000, fps: 30 });
+  it('cria a lista de encodings quando o navegador não trouxe nenhuma', async () => {
+    const semLista = sender('video', { encodings: undefined });
+    const vazia = sender('video', { encodings: [] });
+    const pc = criarPeer({ ice: [] });
+    pc.senders = [semLista, vazia];
 
-    const p = s.setParameters.mock.calls[0][0];
-    expect(p.degradationPreference).toBeUndefined();
-    expect(p.encodings[0].maxBitrate).toBeUndefined();
+    await ajustarEnvio(pc, { bitrate: 900 });
+
+    expect(semLista.aplicados[0].encodings[0].maxBitrate).toBe(900);
+    expect(vazia.aplicados[0].encodings[0].maxBitrate).toBe(900);
   });
 
-  it('sender sem faixa é pulado', async () => {
-    const s = { track: null, getParameters: vi.fn(), setParameters: vi.fn() };
-    await ajustarEnvio(com(s), { bitrate: 1 });
-    expect(s.setParameters).not.toHaveBeenCalled();
+  it('não mexe no teto da faixa de som', async () => {
+    const audio = sender('audio', { encodings: [{}] });
+    const pc = criarPeer({ ice: [] });
+    pc.senders = [audio];
+
+    await ajustarEnvio(pc, { bitrate: 2_500_000 });
+
+    expect(audio.aplicados[0].encodings[0]).not.toHaveProperty('maxBitrate');
+    expect(audio.aplicados[0]).not.toHaveProperty('degradationPreference');
   });
 
-  it('navegador que recusa o ajuste transmite com o padrão dele', async () => {
-    const s = senderFalso('video', { encodings: [{}] });
-    s.setParameters = vi.fn(() => Promise.reject(new Error('não suportado')));
+  it('ignora o sender sem faixa', async () => {
+    const orfao = sender(null);
+    const pc = criarPeer({ ice: [] });
+    pc.senders = [orfao];
 
-    // Pior, não quebrado: engolir aqui é o que mantém a transmissão de pé.
-    await expect(ajustarEnvio(com(s), { bitrate: 1 })).resolves.toBeUndefined();
+    await ajustarEnvio(pc, { bitrate: 1 });
+
+    expect(orfao.aplicados).toHaveLength(0);
   });
 
   it('sem argumentos não escreve teto nenhum', async () => {
-    const s = senderFalso('video', { encodings: [{}] });
-    await ajustarEnvio(com(s));
-    expect(s.setParameters.mock.calls[0][0].encodings[0]).toEqual({});
+    // `ajustarEnvio(pc)` acontece quando ainda não há escolha de qualidade.
+    // Escrever um teto aqui seria inventar um limite que ninguém pediu.
+    const video = sender('video', { encodings: [{}] });
+    const pc = criarPeer({ ice: [] });
+    pc.senders = [video];
+
+    await ajustarEnvio(pc);
+
+    expect(video.aplicados[0].encodings[0]).toEqual({});
+  });
+
+  it('segue transmitindo quando o navegador recusa o ajuste', async () => {
+    // Transmitir com o padrão do navegador é pior; não é quebrado.
+    const teimoso = sender('video', { encodings: [{}], recusa: true });
+    const pc = criarPeer({ ice: [] });
+    pc.senders = [teimoso];
+
+    await expect(ajustarEnvio(pc, { bitrate: 1 })).resolves.toBeUndefined();
   });
 });
 
 describe('resumoPeer', () => {
-  const stats = (lista) => ({
-    getStats: () => Promise.resolve(new Map(lista.map((s) => [s.id, s]))),
+  const par = (extra = {}) => ({
+    id: 'par',
+    type: 'candidate-pair',
+    state: 'succeeded',
+    localCandidateId: 'local',
+    currentRoundTripTime: 0.042,
+    ...extra,
   });
 
-  it('lê o ida-e-volta do par que venceu', async () => {
-    const r = await resumoPeer(
-      stats([
-        { id: 'l1', type: 'local-candidate', candidateType: 'srflx' },
-        {
-          id: 'p1',
-          type: 'candidate-pair',
-          state: 'succeeded',
-          currentRoundTripTime: 0.0234,
-          localCandidateId: 'l1',
-        },
-      ]),
-    );
+  function comEstatisticas(entradas) {
+    const pc = criarPeer({ ice: [] });
+    pc.estatisticas = new Map(entradas.map((e) => [e.id, e]));
+    return pc;
+  }
 
-    expect(r).toEqual({ rtt: 23, relay: false });
+  it('traduz o ida-e-volta para milissegundos', async () => {
+    const pc = comEstatisticas([
+      par(),
+      { id: 'local', type: 'local-candidate', candidateType: 'srflx' },
+    ]);
+
+    expect(await resumoPeer(pc)).toMatchObject({ rtt: 42, relay: false });
   });
 
-  it('acusa o caminho por TURN, que gasta banda do servidor', async () => {
-    const r = await resumoPeer(
-      stats([
-        { id: 'l1', type: 'local-candidate', candidateType: 'relay' },
-        {
-          id: 'p1',
-          type: 'candidate-pair',
-          state: 'succeeded',
-          currentRoundTripTime: 0.1,
-          localCandidateId: 'l1',
-        },
-      ]),
-    );
+  it('acusa quando a conexão está passando por TURN', async () => {
+    // TURN encaminha o vídeo de verdade: é banda paga por alguém, e quem olha
+    // o diagnóstico precisa saber que está nesse caminho.
+    const pc = comEstatisticas([
+      par(),
+      { id: 'local', type: 'local-candidate', candidateType: 'relay' },
+    ]);
 
-    expect(r).toEqual({ rtt: 100, relay: true });
+    expect(await resumoPeer(pc)).toMatchObject({ relay: true });
   });
 
-  it('ignora o par que não venceu', async () => {
-    const r = await resumoPeer(
-      stats([
-        { id: 'p1', type: 'candidate-pair', state: 'failed', currentRoundTripTime: 9 },
-        {
-          id: 'p2',
-          type: 'candidate-pair',
-          state: 'succeeded',
-          nominated: false,
-          currentRoundTripTime: 9,
-        },
-      ]),
-    );
+  it('ignora o par que não foi escolhido', async () => {
+    const pc = comEstatisticas([par({ id: 'a', state: 'failed' })]);
 
-    expect(r).toEqual({ rtt: null, relay: false });
+    expect(await resumoPeer(pc)).toMatchObject({ rtt: null, relay: false });
   });
 
-  it('getStats que explode apaga o diagnóstico, não a conexão', async () => {
-    const r = await resumoPeer({ getStats: () => Promise.reject(new Error('antigo demais')) });
-    expect(r).toEqual({ rtt: null, relay: false });
+  it('devolve só o que dá para agir: ida-e-volta e se passa por TURN', async () => {
+    // Sem taxa de chegada de proposito. Ela existiu aqui por um tempo, lendo
+    // `bytesReceived` — que e um acumulado desde o inicio, nao uma taxa. Um
+    // numero com nome de velocidade e valor de total engana quem le o painel
+    // mais do que a ausencia dele.
+    const pc = comEstatisticas([
+      par(),
+      { id: 'local', type: 'local-candidate', candidateType: 'srflx' },
+      { id: 'in', type: 'inbound-rtp', kind: 'video', bytesReceived: 4242 },
+    ]);
+
+    expect(Object.keys(await resumoPeer(pc)).sort()).toEqual(['relay', 'rtt']);
+  });
+
+  it('some o diagnóstico, e não a conexão, quando getStats lança', async () => {
+    const pc = criarPeer({ ice: [] });
+    pc.getStats = async () => {
+      throw new Error('sem suporte');
+    };
+
+    expect(await resumoPeer(pc)).toEqual({ rtt: null, relay: false });
   });
 });

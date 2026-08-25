@@ -86,27 +86,38 @@ check(
   const sala = await api('/api/rooms/create', { identity: eu.identity, name: 'Sala Sai' });
   const share = new URL(sala.shareUrl).searchParams.get('t');
 
+  /**
+   * A escuta nasce junto com o socket, e nao depois do `open`.
+   *
+   * Entre um evento e o outro cabe uma mensagem, e a primeira coisa que o
+   * servidor manda ao transmissor e justamente o `slot`. Assinando depois, ela
+   * as vezes chegava antes de existir quem ouvisse — e nao volta. O teste
+   * entao acusava a falta de uma mensagem que tinha sido enviada, o que so
+   * acontecia na maquina do CI, que e onde o intervalo entre os dois eventos
+   * abre o suficiente.
+   */
   const abrir = (tok, sufixo = '') =>
     new Promise((ok, no) => {
       const w = new WebSocket(WSB + '/ws?t=' + encodeURIComponent(tok) + sufixo);
+      w.recebidas = [];
+      w.fechou = false;
+      w.on('message', (d) => {
+        try {
+          w.recebidas.push(JSON.parse(d.toString()));
+        } catch {
+          /* quadro binario */
+        }
+      });
+      w.on('close', () => {
+        w.fechou = true;
+      });
       w.on('open', () => ok(w));
       w.on('error', no);
     });
 
   const viewer = await abrir(sala.viewerToken);
   const tx = await abrir(share, '&fonte=tela');
-  const doTx = [];
-  let txFechou = false;
-  tx.on('message', (d) => {
-    try {
-      doTx.push(JSON.parse(d.toString()));
-    } catch {
-      /* quadro binario */
-    }
-  });
-  tx.on('close', () => {
-    txFechou = true;
-  });
+  const doTx = tx.recebidas;
   tx.send(JSON.stringify({ type: 'start' }));
   await new Promise((r) => setTimeout(r, 600));
 
@@ -119,7 +130,7 @@ check(
   await new Promise((r) => setTimeout(r, 8000));
   check(
     'com a pessoa na sala, a transmissao continua',
-    !txFechou && !doTx.some((m) => m.type === 'stop-request'),
+    !tx.fechou && !doTx.some((m) => m.type === 'stop-request'),
   );
 
   // Sai da atividade. So a aba de captura fica de pe.
