@@ -230,6 +230,7 @@ function render(data) {
   renderRecursos(data.system);
   renderAmbiente(data);
   renderSinais(data);
+  renderClientes(data);
   renderAjustes(data);
 
   historico.push({
@@ -601,6 +602,64 @@ function celula(linha, principal, secundaria = null) {
   return td;
 }
 
+// ----------------------------------------------------------------- clientes
+
+/** Como cada estado se chama na tela, e com que cor. */
+const ESTADOS = {
+  travado: { rotulo: 'travado', tom: 'erro' },
+  'sem-imagem': { rotulo: 'sem imagem', tom: 'erro' },
+  'sem-decodificador': { rotulo: 'sem decodificador', tom: 'erro' },
+  atrasado: { rotulo: 'atrasado', tom: 'aviso' },
+  ok: { rotulo: 'ok', tom: '' },
+};
+
+/**
+ * A tabela do que está chegando do outro lado.
+ *
+ * As cinco últimas colunas são o diagnóstico inteiro, e cada uma acusa uma
+ * causa diferente: `fps` diz se a imagem anda; `atraso` diz se ela é de agora
+ * ou de minutos atrás; `decode` diz se o decodificador daquela máquina está
+ * dando conta; `resync` diz quantas vezes o relógio da origem saltou; e
+ * `largados` diz quanto foi jogado fora para o atraso não virar permanente.
+ *
+ * Um `resync` que sobe sozinho é troca de tela ou aba dormindo. Um `decode`
+ * fundo com `largados` subindo é aquela máquina não aguentando a resolução. Os
+ * dois pareciam a mesma coisa — "travou" — até esta tabela existir.
+ */
+function renderClientes(data) {
+  const lista = data.clientes?.espectadores ?? [];
+
+  text('clientesResumo', String(lista.length));
+  $('clientesEmpty').hidden = lista.length > 0;
+  $('clientesScroll').hidden = lista.length === 0;
+  if (!lista.length) return;
+
+  const linhas = lista.map((c) => {
+    const linha = el('tr');
+    linha.append(el('td', null, c.nome ?? c.peer));
+    linha.append(el('td', null, `${c.sala} · ${c.slot}`));
+
+    const info = ESTADOS[c.estado] ?? { rotulo: c.estado, tom: '' };
+    const estado = el('td', null, info.rotulo);
+    if (info.tom) estado.style.color = `var(--${info.tom === 'erro' ? 'danger' : 'warn'})`;
+    linha.append(estado);
+
+    linha.append(el('td', null, c.via === 'rtc' ? 'direto' : 'relay'));
+    linha.append(el('td', 'num', c.fps === null ? '—' : String(c.fps)));
+
+    const atraso = el('td', 'num', formatMs(c.lag));
+    if (c.lag > 2000) atraso.style.color = 'var(--warn)';
+    linha.append(atraso);
+
+    linha.append(el('td', 'num', String(c.decode)));
+    linha.append(el('td', 'num', String(c.resync)));
+    linha.append(el('td', 'num', String(c.largados)));
+    return linha;
+  });
+
+  $('clientesRows').replaceChildren(...linhas);
+}
+
 // ------------------------------------------------------------------- sinais
 
 /**
@@ -613,6 +672,38 @@ function celula(linha, principal, secundaria = null) {
  */
 function renderSinais(data) {
   const sinais = [];
+
+  // O que chegou do outro lado, que é onde os travamentos de verdade moram.
+  const clientes = data.clientes?.espectadores ?? [];
+  const parados = clientes.filter(
+    (c) => c.estado === 'travado' || c.estado === 'sem-imagem' || c.estado === 'sem-decodificador',
+  );
+  if (parados.length) {
+    sinais.push({
+      nivel: 'erro',
+      titulo: count(parados.length, 'tela parada', 'telas paradas'),
+      texto:
+        `Está chegando byte e não está virando imagem: ${parados
+          .map((c) => `${c.nome ?? c.peer} (${c.estado})`)
+          .join(', ')}. ` +
+        'Se o resync estiver subindo, o relógio da origem saltou — trocar de tela e voltar resolve. ' +
+        'Se for sem decodificador, o codec não subiu naquela máquina.',
+    });
+  }
+
+  const atrasados = clientes.filter((c) => c.estado === 'atrasado');
+  if (atrasados.length) {
+    sinais.push({
+      nivel: 'aviso',
+      titulo: count(atrasados.length, 'tela atrasada', 'telas atrasadas'),
+      texto:
+        `Veem a imagem, mas velha: ${atrasados
+          .map((c) => `${c.nome ?? c.peer} (${formatMs(c.lag)})`)
+          .join(', ')}. ` +
+        'Decode fundo com largados subindo é a máquina deles não aguentando a resolução; ' +
+        'baixar qualidade ou taxa de quadros é o que devolve o tempo real.',
+    });
+  }
 
   const afogados = data.rooms.flatMap((r) =>
     r.streams.flatMap((s) => s.espectadores.filter((v) => v.afogado).map((v) => ({ v, s, r }))),

@@ -689,8 +689,9 @@ function buildTile(p, { palco = false, semVideo = false, slot: slotDado = null }
     tile.addEventListener('click', aoClicar);
 
     // Entre pedir para assistir e o primeiro quadro chegar existe uma espera
-    // real: sem este aviso ela é indistinguível de um travamento.
-    if (!stream.started) tile.append(buildLoading());
+    // real: sem este aviso ela é indistinguível de um travamento. E quando a
+    // espera deixa de ser espera, o aviso passa a dizer isso — ver buildLoading.
+    if (!stream.started || stream.travado) tile.append(buildLoading(slot, stream));
 
     // Nada de "parar de assistir" na prévia da própria captura: não há o que
     // parar, ela não veio pela rede. Quem quer parar usa o botão de encerrar a
@@ -751,12 +752,86 @@ function buildTile(p, { palco = false, semVideo = false, slot: slotDado = null }
 }
 
 /** Espera pelo primeiro quadro. Sai sozinha quando o decoder desenha. */
-function buildLoading() {
+/**
+ * O aviso que cobre o tile enquanto não há imagem.
+ *
+ * Eram dois estados mostrados como um só. "Conectando…" com uma rodinha é a
+ * verdade nos primeiros segundos; passando disso vira mentira, e uma mentira
+ * cara: quem está do outro lado fica olhando uma animação achando que falta
+ * pouco, quando na verdade não vem mais nada. Sem contar que a rodinha girando
+ * é indistinguível de uma tela que travou depois de ter funcionado.
+ *
+ * Travado, o aviso troca de texto, para de girar e oferece a única coisa que
+ * costuma resolver: pedir a imagem de novo, do zero.
+ */
+function buildLoading(slot, stream) {
   const wrap = document.createElement('div');
   wrap.className = 'tile-loading';
-  wrap.innerHTML = '<span class="spinner"></span>';
-  wrap.append(document.createTextNode('Conectando…'));
+
+  if (!stream?.travado) {
+    wrap.innerHTML = '<span class="spinner"></span>';
+    wrap.append(document.createTextNode('Conectando…'));
+    return wrap;
+  }
+
+  wrap.classList.add('travado');
+  wrap.append(document.createTextNode('A imagem parou de chegar'));
+
+  const botao = document.createElement('button');
+  botao.type = 'button';
+  botao.className = 'tile-retry';
+  botao.textContent = 'Tentar de novo';
+  botao.addEventListener('click', (e) => {
+    // O tile inteiro é clicável para ampliar; sem isto, tentar de novo também
+    // jogaria a tela para o palco.
+    e.stopPropagation();
+    repedirImagem(slot);
+  });
+  wrap.append(botao);
   return wrap;
+}
+
+/**
+ * Pede a imagem de novo, do começo.
+ *
+ * Recomeçar o decodificador é o que sai de um travamento que não se resolve
+ * sozinho: o player esquece a referência de tempo e a cadeia de quadros, e o
+ * primeiro keyframe que chegar reancora tudo. Vale para as duas causas que
+ * conhecemos — relógio da origem que saltou, e fila de decodificação que
+ * encheu — e não custa nada quando não era nenhuma das duas.
+ */
+function repedirImagem(slot) {
+  const s = streams.get(slot);
+  if (!s) return;
+
+  s.travado = false;
+  marcaDeQuadros.delete(slot);
+
+  if (s.viaRtc) {
+    desistirDoRtc(slot);
+    renderGrid();
+    return;
+  }
+
+  // Larga e pede de novo, em vez de só recomeçar o decodificador aqui.
+  //
+  // O decodificador reiniciado fica esperando um keyframe, e o `watch` do
+  // servidor pede um — mas só na entrada: repetir o pedido para um slot que já
+  // se assiste é ignorado de propósito, para um cliente em laço não inundar a
+  // sala. Sem largar antes, o botão dependeria do keyframe periódico e levaria
+  // até três segundos para fazer qualquer coisa visível; largando, a imagem
+  // volta no primeiro quadro que o servidor mandar.
+  ws?.send(JSON.stringify({ type: 'unwatch', slot }));
+  ws?.send(JSON.stringify({ type: 'watch', slot }));
+
+  s.started = false;
+  // `configKey` sai junto: sem isso o `startStream` acha que já está com esta
+  // config no ar e não refaz o decodificador.
+  s.configKey = null;
+  const config = available.get(slot)?.config;
+  if (config) startStream(slot, config);
+
+  renderGrid();
 }
 
 /** Quantas pessoas assistem esta tela; a lista aparece ao passar o mouse. */
@@ -2436,6 +2511,7 @@ function startStream(slot, config) {
   renderGrid();
   renderBar();
   ensureStatsTimer();
+  ensureVigia();
 }
 
 function closeStream(slot) {
@@ -2451,6 +2527,9 @@ function closeStream(slot) {
   if (s.local) s.video.srcObject = null;
   s.surface.remove();
   streams.delete(slot);
+  // A marca é por tela: deixá-la para trás faria a próxima transmissão neste
+  // slot ser comparada com o contador da anterior e nascer "travada".
+  marcaDeQuadros.delete(slot);
   // Quem estava no palco saiu: renderGrid escolhe a próxima na próxima passada.
   if (activeSlot === slot) activeSlot = null;
 }
@@ -2462,7 +2541,10 @@ function endStream(slot) {
   if (streams.size === 0) {
     clearInterval(lagTimer);
     lagTimer = null;
-    for (const id of ['pLag', 'pFps', 'pRes']) $(id).textContent = '—';
+    clearInterval(vigiaTimer);
+    vigiaTimer = null;
+    for (const id of ['pLag', 'pFps', 'pRes', 'pFilas', 'pResync', 'pLargados'])
+      $(id).textContent = '—';
   }
 
   renderGrid();
@@ -2473,6 +2555,8 @@ function closeAllStreams() {
   for (const slot of [...streams.keys()]) closeStream(slot);
   clearInterval(lagTimer);
   lagTimer = null;
+  clearInterval(vigiaTimer);
+  vigiaTimer = null;
 }
 
 /**
@@ -2673,6 +2757,18 @@ function ensureStatsTimer() {
       // capturados e o ritmo em que eles chegaram.
       const j = s.player.getJitter();
       $('pJitter').textContent = j === null ? '—' : `${j} ms`;
+
+      // O estado interno que explica um travamento, agora que ele é medido.
+      const saude = s.player.getSaude();
+      $('pFilas').textContent = `${saude.fila} · ${saude.decode}`;
+      $('pResync').textContent = String(saude.resync);
+      $('pLargados').textContent = String(saude.largados);
+    }
+
+    if (s.viaRtc) {
+      // Pela conexão direta estes números são do relay, que está parado: mostrar
+      // zeros ali seria dizer que está tudo bem num caminho que nem está em uso.
+      for (const id of ['pFilas', 'pResync', 'pLargados']) $(id).textContent = 'do WebRTC';
     }
 
     // Quatro estados diferentes que, sem isto, parecem todos "sem som".
@@ -2686,6 +2782,118 @@ function ensureStatsTimer() {
     else if (volume === 0) $('pSom').textContent = 'silenciado aqui';
     else $('pSom').textContent = `tocando · ${Math.round(volume * 100)}%`;
   }, 1000);
+}
+
+/**
+ * O vigia da imagem, e o boletim que ele manda.
+ *
+ * São duas coisas com a mesma medição, e por isso moram juntas.
+ *
+ * A primeira é para quem está assistindo agora: o tile dizia "Conectando…" até
+ * o primeiro quadro ser desenhado, e ficava nisso PARA SEMPRE quando o primeiro
+ * quadro não vinha. Uma tela travada e uma tela que nunca começou têm a mesma
+ * cara, e nenhuma das duas oferecia saída — quem estava dentro do Discord só
+ * podia sair e voltar, torcendo.
+ *
+ * A segunda é para depois: o servidor sabe o que mandou e nunca soube o que
+ * chegou. Todo problema deste programa mora depois do último byte que ele
+ * entregou, e a única ferramenta que existia era pedir para a pessoa abrir o
+ * console — o que exige a pessoa presente, avisada, e no exato instante. Ou
+ * seja, quase nunca.
+ *
+ * A conta de "travado" é a mesma nos dois lados: o contador de quadros
+ * desenhados não andou entre duas leituras. Ela é feita aqui para o aviso ser
+ * imediato, e refeita no servidor para não depender de o cliente ser honesto.
+ */
+const VIGIA_MS = 5000;
+
+/**
+ * Quantas leituras seguidas sem um quadro novo até chamar de travado.
+ *
+ * Três leituras são quinze segundos. Parece muito e não é: uma transmissão
+ * pausada, uma janela minimizada do outro lado ou um keyframe que demorou são
+ * todos motivos legítimos para alguns segundos sem quadro, e acusar travamento
+ * em cima deles seria trocar um alarme que nunca toca por um que toca à toa.
+ */
+const TRAVADO_APOS = 3;
+
+let vigiaTimer = null;
+/** Quantos quadros cada tela já tinha na leitura anterior. */
+const marcaDeQuadros = new Map();
+
+function ensureVigia() {
+  if (vigiaTimer) return;
+  vigiaTimer = setInterval(() => {
+    const telas = [];
+    let mudou = false;
+
+    for (const [slot, s] of streams) {
+      // A prévia da própria captura não veio pela rede: não há travamento
+      // possível nela, e medi-la só encheria o painel de linha sem sentido.
+      if (s.local) continue;
+
+      const saude = s.viaRtc ? saudeDoVideo(s) : s.player?.getSaude();
+      if (!saude) continue;
+
+      const antes = marcaDeQuadros.get(slot);
+      const parou = antes !== undefined && saude.desenhados === antes.n;
+      const paradas = parou ? antes.paradas + 1 : 0;
+      marcaDeQuadros.set(slot, { n: saude.desenhados, paradas });
+
+      // Só conta como travado quem pediu para assistir: uma tela que ninguém
+      // abriu está parada porque ninguém a quis, e isso não é defeito.
+      const travado = paradas >= TRAVADO_APOS && watching.has(slot);
+      if (Boolean(s.travado) !== travado) {
+        s.travado = travado;
+        mudou = true;
+      }
+
+      telas.push({ slot, via: s.viaRtc ? 'rtc' : 'relay', saude });
+    }
+
+    if (mudou) renderGrid();
+    if (telas.length) enviarBoletim(telas);
+  }, VIGIA_MS);
+}
+
+/** A saúde de uma tela que chega pela conexão direta, no mesmo formato. */
+function saudeDoVideo(s) {
+  const q = s.video.getVideoPlaybackQuality?.();
+  return {
+    desenhados: q?.totalVideoFrames ?? 0,
+    fila: 0,
+    decode: 0,
+    resync: 0,
+    largados: q?.droppedVideoFrames ?? 0,
+    lag: 0,
+    jitter: null,
+    decoder: s.video.readyState >= 2 ? 'configured' : 'ausente',
+  };
+}
+
+/**
+ * Manda o boletim, e nunca atrapalha.
+ *
+ * `keepalive` para o último boletim sobreviver à aba sendo fechada, que é
+ * justamente o boletim mais interessante quando alguém sai porque travou. Erro
+ * é engolido de propósito: telemetria que derruba a tela é pior que telemetria
+ * nenhuma, e não há nada que a pessoa possa fazer com essa falha.
+ */
+function enviarBoletim(telas) {
+  if (!roomTokens?.viewerToken) return;
+  fetch(`${P}/api/diag`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: roomTokens.viewerToken, peer: peerId(), telas }),
+    keepalive: true,
+  }).catch(() => {});
+}
+
+/** Identifica esta aba, e não a pessoa: a mesma pessoa em dois lugares são dois. */
+let meuPeer = null;
+function peerId() {
+  meuPeer ??= `p${Math.random().toString(36).slice(2, 8)}`;
+  return meuPeer;
 }
 
 /**

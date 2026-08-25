@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="robots" content="noindex,nofollow" />
     <title>Admin · Sala de Tela</title>
-    <link rel="stylesheet" href="/admin.css?v=2" />
+    <link rel="stylesheet" href="/admin.css?v=3" />
   </head>
   <body>
     <main id="loading" class="center">
@@ -254,6 +254,46 @@
               <div id="sinais" class="sinais"></div>
             </section>
 
+            <!--
+              O que o servidor nunca soube: o que chegou do outro lado.
+
+              Todo problema deste programa mora depois do último byte que o
+              relay entregou — no relógio do player, na fila do decodificador,
+              na CPU de quem assiste. Esta tabela é a única coisa aqui que olha
+              para lá, e é ela que responde "por que a tela dele travou".
+            -->
+            <section class="card panel">
+              <div class="panel-head">
+                <h2>A imagem de quem assiste</h2>
+                <div class="spacer"></div>
+                <span id="clientesResumo" class="badge">0</span>
+              </div>
+
+              <p id="clientesEmpty" class="empty">
+                Ninguém assistindo agora — ou ninguém com uma versão que mande o
+                boletim.
+              </p>
+
+              <div id="clientesScroll" class="table-scroll" hidden>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Pessoa</th>
+                      <th>Tela</th>
+                      <th>Como está</th>
+                      <th>Por onde</th>
+                      <th class="num">fps</th>
+                      <th class="num">Atraso</th>
+                      <th class="num">Decode</th>
+                      <th class="num">Resync</th>
+                      <th class="num">Largados</th>
+                    </tr>
+                  </thead>
+                  <tbody id="clientesRows"></tbody>
+                </table>
+              </div>
+            </section>
+
             <section class="card panel">
               <div class="panel-head">
                 <h2>Log do servidor</h2>
@@ -320,6 +360,6 @@
       </div>
     </div>
 
-    <script src="/admin.js?v=2"></script>
+    <script src="/admin.js?v=3"></script>
   </body>
 </html>

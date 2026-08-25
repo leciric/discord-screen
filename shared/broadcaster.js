@@ -54,6 +54,43 @@ const NIVEIS_H264 = [
  */
 const PERFIS_H264 = ['6400', '4d40', '42e0'];
 
+/**
+ * Níveis do VP9, pelos mesmos dois tetos que decidem os do H.264.
+ *
+ * O nome do codec VP9 é `vp09.PERFIL.NIVEL.BITS`, e este arquivo pedia
+ * `vp09.00.10.08` — nível 1.0, que aguenta 36.864 amostras por quadro, uns
+ * 256×144. É o mesmo erro que o `avc1.42E01E` cometia, escrito no outro codec.
+ *
+ * A diferença é que este não estava custando nada: conferi contra
+ * `VideoEncoder.isConfigSupported` no Chromium, e o nível do VP9 não é validado
+ * contra a resolução — `vp09.00.10.08` é aceito a 1080p60 sem reclamar, ao
+ * contrário do H.264, que é recusado. Ou seja, era uma bomba que não tinha
+ * explodido: basta um navegador que leve o próprio nome de codec a sério para o
+ * VP9 sumir do mapa em silêncio, exatamente como o H.264 sumiu.
+ *
+ * Derivar custa o mesmo que não derivar, e tira a bomba da mesa.
+ */
+const NIVEIS_VP9 = [
+  { nivel: '10', maxFS: 36864, maxSPS: 829440 }, // 1.0
+  { nivel: '11', maxFS: 73728, maxSPS: 2764800 }, // 1.1
+  { nivel: '20', maxFS: 131072, maxSPS: 4608000 }, // 2.0
+  { nivel: '21', maxFS: 279552, maxSPS: 9437184 }, // 2.1
+  { nivel: '30', maxFS: 552960, maxSPS: 20736000 }, // 3.0
+  { nivel: '31', maxFS: 983040, maxSPS: 36864000 }, // 3.1
+  { nivel: '40', maxFS: 2228224, maxSPS: 83558400 }, // 4.0 — 1080p30 cabe
+  { nivel: '41', maxFS: 2228224, maxSPS: 160432128 }, // 4.1 — 1080p60 pede este
+  { nivel: '50', maxFS: 8912896, maxSPS: 311951360 }, // 5.0 — 4K
+  { nivel: '51', maxFS: 8912896, maxSPS: 588251136 }, // 5.1
+];
+
+/** O menor nível de VP9 que aguenta este quadro nesta taxa. */
+export function nivelVP9(width, height, fps) {
+  const amostras = width * height;
+  const porSegundo = amostras * fps;
+  const cabe = NIVEIS_VP9.find((n) => amostras <= n.maxFS && porSegundo <= n.maxSPS);
+  return (cabe ?? NIVEIS_VP9.at(-1)).nivel;
+}
+
 /** O menor nível que aguenta este quadro nesta taxa. */
 export function nivelH264(width, height, fps) {
   const macroblocos = Math.ceil(width / 16) * Math.ceil(height / 16);
@@ -73,9 +110,20 @@ function comNivel(codec, nivel) {
 /**
  * Os codecs a tentar, nesta ordem, para este quadro e esta taxa.
  *
- * H.264 primeiro porque quase sempre tem encoder por hardware; VP8 e VP9 são a
- * saída para quem não tem H.264 nenhum. `annexb` vem antes de cada perfil
- * porque dispensa o blob `description`, e o avcC é aceito onde annexb não é.
+ * H.264 primeiro porque quase sempre tem encoder por hardware. `annexb` vem
+ * antes de cada perfil porque dispensa o blob `description`, e o avcC é aceito
+ * onde annexb não é.
+ *
+ * Depois VP9, e só então VP8 — a ordem entre os dois estava invertida, e
+ * invertida ela nunca chegava no VP9: VP8 não tem nível no nome do codec, então
+ * é aceito em qualquer resolução, e sendo o primeiro dos dois ele vencia
+ * sempre. O VP9 era código morto.
+ *
+ * Para compartilhamento de tela a ordem certa é esta. VP9 comprime bem melhor
+ * que VP8 no mesmo bitrate, e a diferença é maior justamente em tela — texto e
+ * bordas duras são o pior caso do VP8. Onde nenhum dos dois tem encoder por
+ * hardware, e nessa faixa quase nunca tem, o que decide é quanto se ganha por
+ * bit gasto na CPU que sobrou.
  */
 function candidatos(width, height, fps) {
   const nivel = nivelH264(width, height, fps).toString(16).padStart(2, '0');
@@ -83,7 +131,7 @@ function candidatos(width, height, fps) {
     const codec = `avc1.${perfil}${nivel}`;
     return [{ codec, avc: { format: 'annexb' } }, { codec }];
   });
-  return [...h264, { codec: 'vp8' }, { codec: 'vp09.00.10.08' }];
+  return [...h264, { codec: `vp09.00.${nivelVP9(width, height, fps)}.08` }, { codec: 'vp8' }];
 }
 
 /**
@@ -324,6 +372,10 @@ export function createBroadcaster({
   // Quantos quadros a captura entregou, contra quantos foram codificados. A
   // diferença entre os dois é o diagnóstico deste bloco.
   let framesEntrada = 0;
+  // A escolha de codec conseguiu encoder por hardware? `null` enquanto não
+  // houve escolha. É a resposta para "por que esta máquina está a 19 quadros
+  // num alvo de 30", e ficar sem ela custou um dia inteiro uma vez.
+  let porHardware = null;
   // A subida não está dando conta: quadro nenhum entra no encoder enquanto a
   // fila do socket não drenar. Ver ATRASO_REDE_MS. Irmã do `afogado` acima e
   // outra coisa: aquele é a fila do encoder, esta é a fila do socket.
@@ -393,11 +445,27 @@ export function createBroadcaster({
       width: config.width,
       height: config.height,
       direct: Boolean(window.MediaStreamTrackProcessor),
+      porHardware,
     });
+
+    // Software não é erro, é uma explicação — e sem ela a pessoa vê a taxa cair
+    // pela metade e não tem por onde começar. O aviso sai uma vez, no início,
+    // porque a resposta não muda no meio da transmissão.
+    if (porHardware === false) {
+      onAviso?.(
+        `Esta máquina não tem encoder por hardware para ${config.codec}, então a tela está ` +
+          'sendo codificada na CPU. A taxa de quadros pode ficar abaixo do alvo; ' +
+          'baixar a resolução ou a taxa costuma resolver.',
+      );
+    }
 
     statsTimer = setInterval(() => {
       onStats?.({
         viewers,
+        // Vai junto de cada leitura porque é o painel que precisa dele, e o
+        // painel pode ser aberto muito depois do início.
+        porHardware,
+        codec: config?.codec ?? null,
         fps: frames,
         // A taxa que a captura está entregando de verdade. Quando ela está bem
         // acima da escolhida, é a tela que ignorou a restrição — e sem o freio
@@ -733,17 +801,40 @@ export function createBroadcaster({
     // troca de cena ele estoura o alvo com folga, e a rajada é justamente o que
     // entope o relay. Constante troca qualidade em cena difícil por um teto que
     // se cumpre.
-    for (const candidate of candidatos(width, height, fps)) {
-      for (const realtime of [true, false]) {
-        for (const constante of [true, false]) {
-          const cfg = { ...candidate, width, height, bitrate, framerate: fps };
-          if (realtime) cfg.latencyMode = 'realtime';
-          if (constante) cfg.bitrateMode = 'constant';
-          try {
-            const { supported } = await VideoEncoder.isConfigSupported(cfg);
-            if (supported) return cfg;
-          } catch {
-            // candidato inválido neste navegador; tenta o próximo
+    // E o hardware por fora de tudo, que é a lição que custou mais caro aqui.
+    //
+    // O bug do nível 3.0 não apagava a imagem: ele fazia a configuração ser
+    // recusada, o laço cair para o VP8 e a tela inteira passar a codificar na
+    // CPU. Funcionava — mal, pela metade da taxa, e ninguém tinha como saber,
+    // porque nada nesta função registrava em que pé ela tinha parado.
+    //
+    // Perguntar `prefer-hardware` primeiro conserta os dois lados. Garante a
+    // preferência de verdade: hardware em qualquer codec vale mais que software
+    // no codec preferido, porque é a CPU que decide se a captura acompanha.
+    // E, sobretudo, dá uma RESPOSTA: se a primeira passada não achar nada, sabe-se
+    // que esta máquina vai codificar em software, e isso vira aviso e vira
+    // linha no painel em vez de mistério.
+    //
+    // Conferido que a pergunta discrimina: no Chromium sem GPU,
+    // `prefer-hardware` é recusado para avc1, vp9, vp8 e av1, enquanto
+    // `no-preference` aceita os quatro. A resposta não é decorativa.
+    for (const hardware of [true, false]) {
+      for (const candidate of candidatos(width, height, fps)) {
+        for (const realtime of [true, false]) {
+          for (const constante of [true, false]) {
+            const cfg = { ...candidate, width, height, bitrate, framerate: fps };
+            if (hardware) cfg.hardwareAcceleration = 'prefer-hardware';
+            if (realtime) cfg.latencyMode = 'realtime';
+            if (constante) cfg.bitrateMode = 'constant';
+            try {
+              const { supported } = await VideoEncoder.isConfigSupported(cfg);
+              if (supported) {
+                porHardware = hardware;
+                return cfg;
+              }
+            } catch {
+              // candidato inválido neste navegador; tenta o próximo
+            }
           }
         }
       }
@@ -1005,7 +1096,17 @@ export function createBroadcaster({
 
     // O decoderConfig chega no primeiro chunk e sempre que a config muda.
     if (metadata?.decoderConfig) {
-      ws.send(JSON.stringify({ type: 'config', config: serializeConfig(metadata.decoderConfig) }));
+      // `porHardware` viaja junto porque é aqui que o servidor fica sabendo em
+      // que pé a escolha de codec parou. Vai fora do `config` de propósito: o
+      // `config` é repassado intacto para o decodificador de quem assiste, e
+      // não se mistura opinião nossa com o contrato do WebCodecs.
+      ws.send(
+        JSON.stringify({
+          type: 'config',
+          config: serializeConfig(metadata.decoderConfig),
+          porHardware,
+        }),
+      );
       configEnviada = true;
     }
 

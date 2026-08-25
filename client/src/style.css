@@ -575,6 +575,33 @@ body {
   pointer-events: none;
 }
 
+/**
+ * Travado é outro estado, e precisa parecer outro estado.
+ *
+ * `pointer-events` volta porque aqui existe um botão para clicar — no aviso de
+ * "conectando" a camada é atravessável de propósito, para o clique continuar
+ * chegando no tile e ampliando a tela.
+ */
+.tile-loading.travado {
+  color: var(--text, #e8e8ea);
+  pointer-events: auto;
+}
+
+.tile-retry {
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  background: rgba(255, 255, 255, 0.1);
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tile-retry:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
 .spinner {
   width: 26px;
   height: 26px;

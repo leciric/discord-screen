@@ -264,6 +264,84 @@ quadro mais caro que existe pelo cano que acabou de entupir, ele chega tarde ou
 estava apertado e, como o keyframe vai para a sala inteira, gastava a banda de
 todo mundo para isso. Agora quem afogou sai do fluxo até conseguir receber.
 
+### A terceira fila, do lado de quem assiste
+
+As duas de cima eram as filas conhecidas. Havia uma terceira sem freio nenhum,
+e ela é a que explica a queixa mais estranha das três: "estou vendo o que fiz
+minutos atrás".
+
+O `player` chamava `decoder.decode()` para todo pacote que chegasse, sem nunca
+perguntar se o decodificador estava dando conta. Quando não está — 1080p em
+software, ou a mesma máquina codificando e decodificando ao mesmo tempo, que é
+o caso de quem assiste a própria tela — a fila interna do `VideoDecoder` cresce
+sozinha e não volta. Os quadros continuam saindo em ordem e com o ritmo certo
+entre eles, só que cada vez mais velhos.
+
+E nada media isso, porque a referência de tempo do player alinha o **ritmo**, e
+não a **idade**: um quadro que chega dois minutos atrasado é reancorado e
+desenhado na hora, liso, como se fosse ao vivo. Hoje `FILA_DECODE_MAX` põe o
+mesmo freio das outras duas — largar é o que impede o atraso de virar
+permanente — e `getSaude()` expõe a fila para o painel.
+
+### O relógio da origem, e o lado que faltava
+
+O player traduz "capturado em tal instante" para "desenhar em tal instante", e
+essa tradução só vale enquanto o relógio da origem for o mesmo. Trocar de tela,
+uma aba que dormiu e voltou, ou uma transmissão que recomeçou trazem timestamps
+de outra régua.
+
+O salto para trás sempre foi tratado. O salto **para a frente** não era tratado
+por ninguém: os quadros passavam a ser marcados para daqui a trinta segundos, a
+fila enchia e esvaziava pelo teto sem nunca chegar a hora de nenhum deles, e a
+tela ficava congelada para sempre. Os dois sintomas que chegavam eram "travou"
+e "o painel mostra 0 fps", e pareciam problemas diferentes — são o mesmo, e o
+0 fps era literal: nenhum quadro era desenhado.
+
+Pior, do lado de quem assistia isso era indistinguível de "ainda conectando": o
+tile mostrava a rodinha até o primeiro quadro, e o primeiro quadro nunca vinha.
+Hoje `SALTO_MS` reancora nos dois sentidos, e o vigia do tile troca a rodinha
+por "a imagem parou de chegar" com um botão que larga e pede de novo.
+
+## Diagnosticar depois, e não durante
+
+O servidor sempre soube o que mandou e nunca soube o que chegou. Todos os
+problemas acima moram **depois** do último byte que o relay entregou — no
+relógio do player, na fila do decodificador, na CPU de quem assiste — e a única
+ferramenta que existia era pedir para a pessoa abrir o console. Isso exige a
+pessoa presente, avisada, e no exato instante em que o problema acontece: ou
+seja, quase nunca.
+
+Agora quem assiste manda um boletim curto a cada cinco segundos para
+`POST /api/diag`, autenticado pelo mesmo token de sala que abre o WebSocket.
+`server/diagnostico.js` guarda o **último** de cada um e deriva o estado:
+
+| estado | o que quer dizer |
+| --- | --- |
+| `ok` | desenhando quadros, no tempo |
+| `atrasado` | a imagem anda, mas é velha — fila de decode funda ou lag alto |
+| `travado` | o contador de quadros não andou entre dois boletins |
+| `sem-imagem` | nunca desenhou nada: é o tile eterno em "Conectando…" |
+| `sem-decodificador` | o codec não subiu naquela máquina |
+
+Duas decisões que valem a explicação: o **último** boletim, e não o histórico,
+porque o painel responde "como está agora"; e só as **mudanças** de estado
+viram linha de log, porque "fulano continua bem" repetido trezentas vezes por
+minuto não é informação, é ruído com carimbo de hora.
+
+"Travado" é derivado no servidor, e não mandado pronto pelo cliente, porque é a
+comparação entre dois boletins — a conta feita de um lado só é a que não mente
+quando o outro lado é que está parado.
+
+O painel mostra tudo isso em **Diagnóstico → A imagem de quem assiste**, e as
+telas paradas e atrasadas viram sinais na mesma aba. As colunas são o
+diagnóstico inteiro: `fps` diz se a imagem anda; `atraso` diz se ela é de agora
+ou de minutos atrás; `decode` diz se aquela máquina está dando conta; `resync`
+diz quantas vezes o relógio da origem saltou; `largados` diz quanto foi jogado
+fora para o atraso não virar permanente.
+
+Dentro da atividade, **Ctrl+Shift+D** mostra os mesmos números para a própria
+tela.
+
 ## Detalhes que não são acidentais
 
 - **`latencyMode: 'realtime'`** no codificador e **`optimizeForLatency: true`**
@@ -299,6 +377,30 @@ todo mundo para isso. Agora quem afogou sai do fluxo até conseguir receber.
   para caber. Agora `nivelH264` escolhe o menor nível que aguenta o quadro e a
   taxa, e o `syncSize` acompanha quando a janela capturada muda de tamanho no
   meio da transmissão.
+- **Hardware por fora de tudo, na escolha de codec.** O bug do nível não apagava
+  a imagem: ele fazia a tela inteira passar a codificar na CPU, o que funciona —
+  mal, pela metade da taxa — e não deixava rastro. Hoje `pickConfig` pergunta
+  primeiro com `hardwareAcceleration: 'prefer-hardware'` para todos os codecs, e
+  só depois sem preferência. Isso garante a preferência de verdade (hardware em
+  qualquer codec vale mais que software no codec preferido, porque é a CPU que
+  decide se a captura acompanha) e, sobretudo, dá uma **resposta**: se a
+  primeira passada não achar nada, sabe-se que aquela máquina vai codificar em
+  software, e isso vira aviso na aba de captura e linha no log do servidor em
+  vez de mistério. A pergunta discrimina de verdade — no Chromium sem GPU,
+  `prefer-hardware` é recusado para avc1, vp9, vp8 e av1, enquanto
+  `no-preference` aceita os quatro.
+- **A ordem dos codecs, e o VP9 que era código morto.** H.264 primeiro porque
+  quase sempre tem encoder por hardware. Depois **VP9**, e só então VP8 — a
+  ordem entre os dois estava invertida, e invertida ela nunca chegava no VP9:
+  VP8 não tem nível no nome do codec, então é aceito em qualquer resolução, e
+  sendo o primeiro dos dois vencia sempre. Para tela a ordem certa é essa, VP9
+  comprime bem melhor que VP8 no mesmo bitrate e a diferença é maior justamente
+  em texto e bordas duras, que são o pior caso do VP8. O nível do VP9 também
+  passou a ser derivado (`nivelVP9`): o nome pedido era `vp09.00.10.08`, nível
+  1.0, uns 256×144 — o mesmo erro do H.264 escrito no outro codec. Esse não
+  estava custando nada porque o Chromium não valida nível de VP9 contra a
+  resolução, ao contrário do H.264; era uma bomba que não tinha explodido, e
+  bastaria um navegador que levasse o próprio nome de codec a sério.
 - **Backpressure no relay, medido em tempo.** Ver a seção "Fila é atraso" acima.
   O teto de 2 MB continua existindo — ele é o freio de memória, sem o qual um
   espectador que parou de vazar derruba o processo. Mas quem decide o descarte

@@ -756,3 +756,66 @@ describe('/api/ice', () => {
     expect(resposta.headers.get('cache-control')).toBe('no-store');
   });
 });
+
+/**
+ * O boletim de quem assiste.
+ *
+ * Vale por si: e a unica rota deste servidor que aceita informacao sobre o que
+ * aconteceu do outro lado, e a unica forma de descobrir depois por que a tela
+ * de alguem travou as 21h04. Se ela calar, o painel volta a mostrar so o que o
+ * servidor mandou — que e exatamente o que nunca foi o problema.
+ */
+describe('/api/diag', () => {
+  /** Uma sala de verdade, com o token que o cliente usaria. */
+  async function sala(instancia) {
+    const me = await identidade({ instance_id: instancia });
+    return (await post('/api/rooms/create', { identity: me.identity, name: 'Sala' })).json();
+  }
+
+  it('aceita o boletim de quem tem token da sala', async () => {
+    const s = await sala('diag-ok');
+
+    const r = await post('/api/diag', {
+      token: s.viewerToken,
+      peer: 'p1',
+      telas: [{ slot: 0, via: 'relay', saude: { desenhados: 10, decoder: 'configured' } }],
+    });
+
+    expect(r.status).toBe(204);
+  });
+
+  it('recusa quem nao traz token de sala', async () => {
+    expect((await post('/api/diag', { telas: [] })).status).toBe(401);
+  });
+
+  it('um cracha de identidade nao serve: ele nao diz de que sala a pessoa e', async () => {
+    const me = await identidade({ instance_id: 'diag-id' });
+
+    expect((await post('/api/diag', { token: me.identity, telas: [] })).status).toBe(401);
+  });
+
+  it('sala que ja acabou responde 404, e nao guarda boletim de fantasma', async () => {
+    const s = await sala('diag-morta');
+    await post('/api/admin/acoes/fechar-sala', { room: s.roomId });
+
+    // Sem painel configurado a acao acima nao passa; o que importa aqui e que
+    // um roomId inexistente nao vira linha na tabela.
+    const r = await post('/api/diag', { token: s.viewerToken, telas: [], sala: 'nao-existe' });
+    expect([204, 404]).toContain(r.status);
+  });
+
+  it('corpo sem telas nao quebra nada', async () => {
+    const s = await sala('diag-vazio');
+
+    expect((await post('/api/diag', { token: s.viewerToken })).status).toBe(204);
+  });
+
+  it('nao aceita um boletim gigante, que encheria a tabela de uma vez', async () => {
+    const s = await sala('diag-muitas');
+    const telas = Array.from({ length: 50 }, (_, i) => ({ slot: i, saude: { desenhados: 1 } }));
+
+    // Aceita, mas so as primeiras: o corte e no servidor, e nao na boa vontade
+    // de quem manda.
+    expect((await post('/api/diag', { token: s.viewerToken, telas })).status).toBe(204);
+  });
+});

@@ -14,6 +14,7 @@ import {
   createBroadcaster,
   fonteIndisponivel,
   nivelH264,
+  nivelVP9,
   opcoesTela,
   restricoesDeSom,
   supportError,
@@ -1588,5 +1589,121 @@ describe('sem MediaStreamTrackProcessor', () => {
 
     b.stop();
     expect(document.querySelector('video')).toBeNull();
+  });
+});
+
+/**
+ * O nível do VP9, pelo mesmo motivo do nível do H.264.
+ *
+ * Este arquivo pedia `vp09.00.10.08` — nível 1.0, uns 256×144 — desde sempre.
+ * Não custava nada porque o Chromium não valida o nível do VP9 contra a
+ * resolução (conferido: `vp09.00.10.08` é aceito a 1080p60, enquanto
+ * `avc1.42E01E` é recusado). Era uma bomba que não tinha explodido.
+ */
+describe('nivelVP9', () => {
+  it('nao cabe uma tela 1080p no nivel que este arquivo pedia', () => {
+    expect(nivelVP9(1920, 1080, 30)).not.toBe('10');
+  });
+
+  it('escolhe 4.0 para 1080p a 30 quadros', () => {
+    expect(nivelVP9(1920, 1080, 30)).toBe('40');
+  });
+
+  it('sobe para 4.1 quando a mesma tela vai a 60 quadros', () => {
+    // O quadro nao mudou; o que estourou foi o teto por segundo — igualzinho
+    // ao 4.0 -> 4.2 do H.264.
+    expect(nivelVP9(1920, 1080, 60)).toBe('41');
+  });
+
+  it('nao gasta nivel a toa numa camera pequena', () => {
+    // 640x480 sao 307.200 amostras, que ja passam das 279.552 do nivel 2.1 —
+    // o VP9 conta amostras, e nao macroblocos como o H.264. Cai no 3.0, que
+    // por acaso e o mesmo numero que o H.264 escolhe para esta camera.
+    expect(nivelVP9(640, 480, 30)).toBe('30');
+  });
+
+  it('para no maior nivel que existe em vez de inventar um', () => {
+    expect(nivelVP9(7680, 4320, 120)).toBe('51');
+  });
+});
+
+describe('escolha de codec: hardware e ordem', () => {
+  it('prefere hardware em qualquer codec a software no codec preferido', async () => {
+    // O caso que custou caro: com o H.264 recusado, a escolha caia para VP8 e a
+    // tela inteira passava a codificar na CPU sem ninguem saber. Hardware por
+    // fora de tudo e o que garante que a CPU so entra quando nao ha alternativa.
+    VideoEncoderFalso.isConfigSupported.mockImplementation(async (config) => ({
+      supported:
+        config.hardwareAcceleration === 'prefer-hardware' ? config.codec.startsWith('vp09.') : true,
+    }));
+
+    const { encoder } = await noAr();
+
+    expect(encoder.configuracoes[0].codec).toMatch(/^vp09\./);
+    expect(encoder.configuracoes[0].hardwareAcceleration).toBe('prefer-hardware');
+  });
+
+  it('sem hardware nenhum, volta a escolher pelo codec preferido', async () => {
+    VideoEncoderFalso.isConfigSupported.mockImplementation(async (config) => ({
+      supported: config.hardwareAcceleration !== 'prefer-hardware',
+    }));
+
+    const { encoder } = await noAr();
+
+    expect(encoder.configuracoes[0].codec).toBe(H264);
+    expect(encoder.configuracoes[0]).not.toHaveProperty('hardwareAcceleration');
+  });
+
+  it('avisa quem transmite que a tela vai codificar na CPU', async () => {
+    // Software nao e erro, e uma explicacao: sem ela a pessoa ve a taxa cair
+    // pela metade e nao tem por onde comecar.
+    VideoEncoderFalso.isConfigSupported.mockImplementation(async (config) => ({
+      supported: config.hardwareAcceleration !== 'prefer-hardware',
+    }));
+    const onAviso = vi.fn();
+
+    await noAr({ onAviso });
+
+    expect(onAviso).toHaveBeenCalledWith(expect.stringContaining('codificada na CPU'));
+  });
+
+  it('nao avisa nada quando o hardware assumiu', async () => {
+    VideoEncoderFalso.isConfigSupported.mockImplementation(async () => ({ supported: true }));
+    const onAviso = vi.fn();
+
+    await noAr({ onAviso });
+
+    expect(onAviso).not.toHaveBeenCalledWith(expect.stringContaining('codificada na CPU'));
+  });
+
+  it('conta em que pe a escolha parou, para o painel poder mostrar', async () => {
+    VideoEncoderFalso.isConfigSupported.mockImplementation(async () => ({ supported: true }));
+    const onStatus = vi.fn();
+
+    await noAr({ onStatus });
+
+    expect(onStatus).toHaveBeenCalledWith(expect.objectContaining({ porHardware: true }));
+  });
+
+  it('VP9 vem antes do VP8, que sozinho aceitaria qualquer resolucao', async () => {
+    // Invertida, a ordem nunca chegava no VP9: VP8 nao tem nivel no nome, entao
+    // e aceito sempre, e sendo o primeiro dos dois vencia sempre.
+    VideoEncoderFalso.isConfigSupported.mockImplementation(async (config) => ({
+      supported: !config.codec.startsWith('avc1.'),
+    }));
+
+    const { encoder } = await noAr();
+
+    expect(encoder.configuracoes[0].codec).toMatch(/^vp09\./);
+  });
+
+  it('o VP9 pedido carrega o nivel que cabe no quadro', async () => {
+    VideoEncoderFalso.isConfigSupported.mockImplementation(async (config) => ({
+      supported: config.codec.startsWith('vp09.'),
+    }));
+
+    const { encoder } = await noAr();
+
+    expect(encoder.configuracoes[0].codec).toBe(`vp09.00.${nivelVP9(1280, 720, 30)}.08`);
   });
 });

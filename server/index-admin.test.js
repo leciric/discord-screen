@@ -365,6 +365,20 @@ describe('/api/admin/metrics', () => {
     expect(painel.system).toHaveProperty('platform');
     expect(JSON.stringify(painel)).not.toContain(process.env.SESSION_SECRET);
   });
+
+  /**
+   * O painel so sabia o que o servidor mandou. Todo problema deste programa
+   * mora depois do ultimo byte entregue — no relogio do player, na fila do
+   * decodificador, na CPU de quem assiste —, e esta e a unica parte da
+   * resposta que olha para la.
+   */
+  it('leva junto como esta a imagem de quem assiste', async () => {
+    const painel = await (await get('/api/admin/metrics', { headers: comoAdmin() })).json();
+
+    expect(painel.clientes).toHaveProperty('espectadores');
+    expect(painel.clientes).toHaveProperty('resumo');
+    expect(Array.isArray(painel.clientes.espectadores)).toBe(true);
+  });
 });
 
 describe('/api/admin/logs', () => {

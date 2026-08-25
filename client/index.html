@@ -120,6 +120,16 @@
           <div class="panel-row"><span>Irregularidade</span><strong id="pJitter">—</strong></div>
           <div class="panel-row"><span>Quadros</span><strong id="pFps">—</strong></div>
           <div class="panel-row"><span>Resolução</span><strong id="pRes">—</strong></div>
+          <!--
+            As duas filas do caminho de quem assiste, e o que elas já custaram.
+            Numa transmissão saudável ficam em "0 · 0" e param lá; é o
+            movimento delas que separa "a rede está ruim" de "esta máquina não
+            está dando conta" — e que aponta o relógio da origem quando o
+            número de ressincronizações sobe sozinho.
+          -->
+          <div class="panel-row"><span>Filas (exibir · decodificar)</span><strong id="pFilas">—</strong></div>
+          <div class="panel-row"><span>Ressincronizações</span><strong id="pResync">—</strong></div>
+          <div class="panel-row"><span>Largados</span><strong id="pLargados">—</strong></div>
           <div class="panel-row"><span>Som</span><strong id="pSom">—</strong></div>
           <button id="probe" class="panel-btn">Testar captura no iframe</button>
         </div>

@@ -12,6 +12,7 @@ import * as R from './rooms.js';
 import { systemSnapshot, startSampling } from './system.js';
 import { buildAdminDashboard } from './admin.js';
 import * as EV from './eventos.js';
+import * as DIAG from './diagnostico.js';
 import { PORTA_PADRAO, LOCAL_PADRAO } from '../shared/porta.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -806,6 +807,40 @@ app.get('/auth/callback', async (req, res) => {
   }
 });
 
+/**
+ * O boletim de quem está assistindo.
+ *
+ * Autenticado pelo token da sala que a pessoa já tem — o mesmo que abre o
+ * WebSocket. Não concede nada: só permite contar como vai a própria imagem, e
+ * só para a sala em que já se está. Um token de identidade não serve, pela
+ * mesma razão de sempre: ele não diz de que sala a pessoa é.
+ *
+ * Responde 204 e nada mais. É telemetria, não uma consulta, e o cliente não tem
+ * o que fazer com uma resposta — se o servidor estiver fora, o boletim se perde
+ * e a próxima leva já traz o estado atual de novo.
+ */
+app.post('/api/diag', (req, res) => {
+  const auth = verifyToken(req.body?.token);
+  if (!auth?.room) return res.status(401).json({ error: 'Token inválido.' });
+  if (!R.getRoom(auth.room)) return res.status(404).json({ error: 'Sala não existe mais.' });
+
+  const telas = Array.isArray(req.body?.telas) ? req.body.telas.slice(0, 8) : [];
+  for (const tela of telas) {
+    DIAG.registrarRelato({
+      sala: auth.room,
+      // `peer` identifica a aba, e não a pessoa: a mesma pessoa em dois
+      // dispositivos são dois relatos, que é exatamente o que se quer ver.
+      peer: String(req.body?.peer ?? auth.uid ?? '?').slice(0, 40),
+      slot: Number(tela?.slot) || 0,
+      nome: auth.name ?? null,
+      via: tela?.via,
+      saude: tela?.saude ?? {},
+    });
+  }
+
+  res.status(204).end();
+});
+
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
 /**
@@ -981,6 +1016,12 @@ app.post('/api/admin/acoes/:acao', requireAdmin, (req, res) => {
 
     case 'fechar-sala': {
       const n = R.fecharSala(room);
+      // Some com os boletins junto: a sala fechada de propósito não deve
+      // continuar ocupando linha no painel até expirarem sozinhos. A sala que
+      // fecha por inatividade não passa por aqui, e para ela a expiração por
+      // tempo do próprio módulo já resolve — o `rooms.js` é folha e não vai
+      // importar diagnóstico só para isso.
+      DIAG.limparSala(room.id);
       registrar(`fechou a sala (${n} conexões dentro)`);
       return res.json({ ok: true, afetados: n });
     }
@@ -1005,7 +1046,8 @@ app.get('/api/admin/metrics', requireAdmin, (_req, res) => {
       sessionSecretConfigured: Boolean(process.env.SESSION_SECRET),
     },
   });
-  res.json(dashboard);
+  // O que o servidor não sabia até agora: como está a imagem do outro lado.
+  res.json({ ...dashboard, clientes: DIAG.relatorio() });
 });
 
 /**
@@ -1174,7 +1216,15 @@ function handleBroadcaster(ws, room, info, fonte) {
       console.log(`[room ${room.id}] stream iniciada por ${info.name}`);
     } else if (msg.type === 'config' && msg.config) {
       R.setConfig(room, entry, msg.config);
-      console.log(`[room ${room.id}] codec de ${info.name}: ${msg.config.codec}`);
+      // Em que pé a escolha de codec parou é a diferença entre uma tela que
+      // sai a 30 quadros e uma que sai a 19 — e foi invisível por muito tempo.
+      const onde =
+        msg.porHardware === true
+          ? 'hardware'
+          : msg.porHardware === false
+            ? 'SOFTWARE'
+            : 'indefinido';
+      console.log(`[room ${room.id}] codec de ${info.name}: ${msg.config.codec} · ${onde}`);
     } else if (msg.type === 'audio-config' && msg.config) {
       R.setAudioConfig(room, entry, msg.config);
       console.log(`[room ${room.id}] audio de ${info.name}: ${msg.config.codec}`);

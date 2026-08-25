@@ -23,7 +23,7 @@ const anel = [];
 let proximo = 1;
 
 /** Onde o evento nasceu, para o painel poder filtrar. */
-const ESCOPOS = new Set(['sala', 'transmissao', 'painel', 'sistema', 'rede']);
+const ESCOPOS = new Set(['sala', 'transmissao', 'painel', 'sistema', 'rede', 'cliente']);
 
 /**
  * @param {'info'|'aviso'|'erro'} nivel

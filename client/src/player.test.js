@@ -20,6 +20,8 @@ const DELTA = 2;
 let agora = 0;
 let pendentes = [];
 let desenhados = [];
+/** O ultimo decodificador que o player criou, para o teste mexer na fila dele. */
+let ultimoDecoder = null;
 
 /** Canvas de mentira: o player só olha getContext, width/height e o retângulo. */
 function canvasFalso() {
@@ -61,6 +63,7 @@ beforeEach(() => {
   agora = 1000;
   pendentes = [];
   desenhados = [];
+  ultimoDecoder = null;
 
   vi.spyOn(performance, 'now').mockImplementation(() => agora);
   globalThis.requestAnimationFrame = (cb) => {
@@ -75,11 +78,16 @@ beforeEach(() => {
     constructor({ output }) {
       this.output = output;
       this.state = 'unconfigured';
+      // O de verdade tem fila; o teste a controla na mao para poder simular um
+      // decodificador que nao esta dando conta.
+      this.decodeQueueSize = 0;
+      ultimoDecoder = this;
     }
     configure() {
       this.state = 'configured';
     }
     decode(chunk) {
+      this.decodificados++;
       this.output({
         timestamp: chunk.timestamp,
         displayWidth: 1280,
@@ -91,6 +99,7 @@ beforeEach(() => {
       this.state = 'closed';
     }
   };
+  globalThis.VideoDecoder.prototype.decodificados = 0;
   globalThis.EncodedVideoChunk = class {
     constructor(init) {
       Object.assign(this, init);
@@ -224,5 +233,150 @@ describe('irregularidade', () => {
 
     expect(p.getJitter()).toBeGreaterThanOrEqual(18);
     expect(p.getJitter()).toBeLessThanOrEqual(22);
+  });
+});
+
+/**
+ * O relogio da origem nao e o mesmo o tempo todo.
+ *
+ * Trocar de tela, uma aba que dormiu, uma transmissao que recomecou: qualquer
+ * um traz timestamps de outra regua. O salto para tras sempre foi tratado. O
+ * salto para a FRENTE nao era tratado por ninguem, e era ele que congelava a
+ * tela — os quadros ficavam marcados para daqui a meio minuto, a fila estourava
+ * pelo teto antes de a hora chegar, e nenhum era desenhado. A queixa vinha em
+ * duas partes que pareciam problemas diferentes: "travou" e "mostra 0 fps".
+ */
+describe('salto do relogio da origem', () => {
+  /** Enche o player de quadros normais e drena, devolvendo o player pronto. */
+  function transmitindo() {
+    const p = player();
+    for (let i = 0; i < 10; i++) {
+      p.push(pacote(i === 0 ? KEYFRAME : DELTA, i * 33.33));
+      avancar(33.33);
+    }
+    avancar(2000);
+    expect(p.takeFrameCount()).toBeGreaterThan(0);
+    return p;
+  }
+
+  it('a origem que dorme e volta nao congela a tela', () => {
+    const p = transmitindo();
+
+    // Trinta segundos de sono: o relogio de captura pulou para a frente.
+    for (let i = 0; i < 30; i++) {
+      p.push(pacote(DELTA, 30_000 + i * 33.33));
+      avancar(33.33);
+    }
+    avancar(200);
+
+    expect(p.takeFrameCount()).toBeGreaterThan(0);
+  });
+
+  it('e o contador de quadros nao fica em zero, que era o outro sintoma', () => {
+    const p = transmitindo();
+    p.push(pacote(DELTA, 60_000));
+    avancar(100);
+
+    expect(p.takeFrameCount()).toBe(1);
+  });
+
+  it('conta a ressincronizacao, para o diagnostico poder culpar o relogio', () => {
+    const p = transmitindo();
+    expect(p.getSaude().resync).toBe(0);
+
+    p.push(pacote(DELTA, 30_000));
+    avancar(100);
+
+    expect(p.getSaude().resync).toBe(1);
+  });
+
+  it('adiantamento de rajada normal nao conta como salto', () => {
+    // Uma fila inteira chegando de uma vez adianta os quadros em ate ~400 ms.
+    // Isso e a rede entregando em rajada, e nao origem nova: reancorar aqui
+    // jogaria fora o buffer que existe justamente para absorver a rajada.
+    const p = player();
+    p.push(pacote(KEYFRAME, 0));
+    for (let i = 1; i < 10; i++) p.push(pacote(DELTA, i * 33.33));
+
+    expect(p.getSaude().resync).toBe(0);
+  });
+
+  it('o salto para tras continua tratado', () => {
+    const p = transmitindo();
+    p.push(pacote(KEYFRAME, 0));
+    avancar(100);
+
+    expect(p.takeFrameCount()).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * A fila do decodificador era a unica do caminho sem teto.
+ *
+ * Quando ela cresce, os quadros continuam saindo em ordem e no ritmo certo —
+ * so que cada vez mais velhos. E a queixa de "estou vendo o que fiz minutos
+ * atras", e nada no player a media, porque a referencia de tempo alinha o ritmo
+ * e nao a idade.
+ */
+describe('fila do decodificador', () => {
+  it('larga o que chega enquanto o decodificador nao vaza', () => {
+    const p = player();
+    p.push(pacote(KEYFRAME, 0));
+    const antes = ultimoDecoder.decodificados;
+
+    ultimoDecoder.decodeQueueSize = 20;
+    for (let i = 1; i < 10; i++) p.push(pacote(DELTA, i * 33.33));
+
+    expect(ultimoDecoder.decodificados).toBe(antes);
+    expect(p.getSaude().largados).toBe(9);
+  });
+
+  it('volta ao vivo no primeiro keyframe depois de a fila drenar', () => {
+    const p = player();
+    p.push(pacote(KEYFRAME, 0));
+
+    ultimoDecoder.decodeQueueSize = 20;
+    for (let i = 1; i < 10; i++) p.push(pacote(DELTA, i * 33.33));
+
+    // Drenou. Um delta nao serve — a cadeia de referencia foi cortada —, mas o
+    // keyframe seguinte devolve a imagem.
+    ultimoDecoder.decodeQueueSize = 0;
+    const antes = ultimoDecoder.decodificados;
+    p.push(pacote(DELTA, 10 * 33.33));
+    expect(ultimoDecoder.decodificados).toBe(antes);
+
+    p.push(pacote(KEYFRAME, 11 * 33.33));
+    expect(ultimoDecoder.decodificados).toBe(antes + 1);
+  });
+
+  it('fila curta passa direto, que e o caso normal', () => {
+    const p = player();
+    p.push(pacote(KEYFRAME, 0));
+    ultimoDecoder.decodeQueueSize = 2;
+    p.push(pacote(DELTA, 33.33));
+
+    expect(p.getSaude().largados).toBe(0);
+  });
+});
+
+describe('saude', () => {
+  it('entrega as duas filas e o que elas ja custaram', () => {
+    const p = player();
+    p.push(pacote(KEYFRAME, 0));
+
+    expect(p.getSaude()).toMatchObject({
+      fila: expect.any(Number),
+      decode: expect.any(Number),
+      resync: 0,
+      largados: 0,
+      decoder: 'configured',
+    });
+  });
+
+  it('sem decodificador diz que nao ha, e nao finge um estado', () => {
+    const p = player();
+    p.stop();
+
+    expect(p.getSaude().decoder).toBe('ausente');
   });
 });

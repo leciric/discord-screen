@@ -18,7 +18,7 @@ import {
   supportError,
   fonteIndisponivel,
   opcoesTela,
-} from '/shared/broadcaster.js?v=9';
+} from '/shared/broadcaster.js?v=10';
 import { criarCamada, conter } from '/shared/anotacoes.js?v=3';
 import { criarFlutuante, flutuarDisponivel } from '/shared/flutuar.js?v=1';
 import { criarEstudio } from '/shared/estudio.js?v=1';
@@ -720,7 +720,10 @@ function criarPainel(fonte) {
       deviceId: camera ? dispositivo : null,
       onStatus: (s) =>
         setStatus(
-          `Codec: ${s.codec} · ${s.width}×${s.height} · captura ${s.direct ? 'direta' : 'via <video>'}`,
+          `Codec: ${s.codec} · ${s.width}×${s.height} · captura ${s.direct ? 'direta' : 'via <video>'}` +
+            // A linha que faltava: codificar na CPU derruba a taxa pela metade
+            // e não aparecia em lugar nenhum.
+            (s.porHardware === null ? '' : ` · ${s.porHardware ? 'hardware' : 'software'}`),
         ),
       onStats: (s) => {
         el('viewers').textContent = s.viewers;

@@ -50,6 +50,51 @@ const BUFFER_MS = 80;
  */
 const FILA_MAX = 12;
 
+/**
+ * Salto de relógio que denuncia origem nova, em vez de rede irregular.
+ *
+ * A referência de tempo traduz "capturado em tal instante" para "desenhar em
+ * tal instante", e ela só vale enquanto o relógio da origem for o mesmo. Trocar
+ * de tela, uma aba que dormiu e voltou, ou uma transmissão que recomeçou trazem
+ * timestamps de outra régua — e o `broadcaster` já trata esse caso do lado de
+ * lá, pelo mesmo motivo e com o mesmo nome (ver GRADE_PERDIDA).
+ *
+ * Aqui faltava, e faltava só para um dos lados. O salto para trás era visto
+ * (`tsMs < ultimoTs`); o salto para a FRENTE não era visto por ninguém: os
+ * quadros passavam a ser marcados para daqui a trinta segundos, a fila enchia e
+ * esvaziava pelo teto sem nunca chegar a hora de nenhum deles, e a tela ficava
+ * congelada para sempre — com o contador de quadros marcando zero, porque
+ * nenhum era desenhado de fato. Era isso que aparecia como "travou" e como
+ * "0 fps" ao mesmo tempo.
+ *
+ * Um segundo é mais que qualquer rajada de rede — uma fila inteira de FILA_MAX
+ * quadros a 30 fps são 400 ms, e é ela que decide o maior adiantamento legítimo
+ * — e é muito menos que qualquer troca de fonte de verdade.
+ */
+const SALTO_MS = 1000;
+
+/**
+ * Quantos quadros podem estar esperando decodificação antes de largarmos.
+ *
+ * Esta é a única fila do caminho que não tinha teto. O relay já descarta o que
+ * não vaza (ver `atrasoRelayMs`), o encoder já descarta o que não cabe na fila
+ * dele — e aqui, do lado de quem assiste, `decode()` era chamado para todo
+ * pacote que chegasse, sem nunca perguntar se o decodificador estava dando
+ * conta.
+ *
+ * Quando não está — 1080p em software, ou a mesma máquina codificando e
+ * decodificando ao mesmo tempo, que é o caso de quem assiste a própria tela —
+ * a fila interna cresce sozinha e não volta. Os quadros continuam saindo, em
+ * ordem e com o ritmo certo entre eles, só que cada vez mais velhos: é
+ * exatamente a queixa de "estou vendo o que fiz minutos atrás". Nada no player
+ * media isso, porque a referência de tempo alinha o ritmo e não a idade.
+ *
+ * Seis quadros são um quinto de segundo a 30 fps: mais que a rajada de uma
+ * troca de cena, menos do que se percebe. Passando disso, quadro largado é
+ * quadro que não vai atrasar os próximos.
+ */
+const FILA_DECODE_MAX = 6;
+
 /** De quanto em quanto tempo a espera é reavaliada, e sobre qual janela. */
 const AJUSTE_MS = 2000;
 
@@ -63,6 +108,17 @@ export function createPlayer(canvas, { onError, onTamanho } = {}) {
   let needKeyframe = true;
   let lastLagMs = 0;
   let framesDrawn = 0;
+  // Diagnóstico: quantas vezes a referência de tempo teve de ser refeita, e
+  // quantos quadros foram largados por o decodificador não estar acompanhando.
+  // Os dois são zero numa transmissão saudável, e é a subida deles que separa
+  // "a rede está ruim" de "esta máquina não está dando conta".
+  let ressincronizacoes = 0;
+  let largadosNoDecode = 0;
+  // Total de quadros desenhados desde o start. Separado de `framesDrawn`
+  // porque aquele é zerado por quem lê (o painel mostra "por segundo"), e um
+  // contador que zera não serve para o vigia perguntar "andou desde a última
+  // vez que olhei?" — os dois leitores se roubariam.
+  let desenhadosTotal = 0;
 
   // Quadros decodificados esperando a hora de aparecer, em ordem de exibição.
   const fila = [];
@@ -124,6 +180,17 @@ export function createPlayer(canvas, { onError, onTamanho } = {}) {
     const view = new DataView(buffer);
     const isKeyframe = view.getUint8(1) === 1;
 
+    // A fila do decodificador encheu: ele está mais devagar do que a chegada.
+    // Largar aqui, inclusive keyframe, é o que impede o atraso de virar
+    // permanente — ver FILA_DECODE_MAX. Pedir keyframe de volta não custa
+    // protocolo nenhum: o transmissor manda um a cada KEYFRAME_EVERY_MS, e é o
+    // primeiro que chegar depois de a fila drenar que devolve a imagem ao vivo.
+    if (decoder.decodeQueueSize > FILA_DECODE_MAX) {
+      largadosNoDecode++;
+      needKeyframe = true;
+      return;
+    }
+
     // Decoder frio só aceita keyframe; deltas antes disso viram erro.
     if (needKeyframe && !isKeyframe) return;
 
@@ -165,10 +232,19 @@ export function createPlayer(canvas, { onError, onTamanho } = {}) {
     const exibirEm = base + tsMs;
     const folga = exibirEm - agora;
 
-    // Chegou depois da própria hora — a rede engasgou e a referência ficou
-    // otimista demais. Reancorar aqui custa um solavanco só, contra um quadro
-    // atrasado a cada quadro se a referência ficasse como está.
-    if (folga < -BUFFER_MS) {
+    // Fora da faixa, e para qualquer um dos dois lados: a referência não vale
+    // mais, e insistir nela custa caro nas duas pontas.
+    //
+    // Atrasado (`folga` muito negativa) a rede engasgou e a referência ficou
+    // otimista demais; reancorar custa um solavanco só, contra um quadro
+    // atrasado a cada quadro se ela ficasse como está.
+    //
+    // Adiantado (`folga` muito positiva) o relógio da origem saltou para a
+    // frente, e este é o lado que faltava: sem reancorar, o quadro fica marcado
+    // para um instante que só chega daqui a muito tempo, a fila estoura pelo
+    // teto antes disso e a tela congela sem nunca mais voltar. Ver SALTO_MS.
+    if (folga < -BUFFER_MS || folga > BUFFER_MS + SALTO_MS) {
+      ressincronizacoes++;
       esvaziar();
       reancorar(agora, tsMs);
       pintar(frame);
@@ -269,6 +345,7 @@ export function createPlayer(canvas, { onError, onTamanho } = {}) {
     // VideoFrame segura memória de GPU; sem close() a aba trava em segundos.
     frame.close();
     framesDrawn++;
+    desenhadosTotal++;
 
     // Avisa no primeiro quadro e sempre que a resolução muda: quem desenha o
     // palco precisa das duas coisas — tirar o "conectando" e refazer a forma.
@@ -293,6 +370,9 @@ export function createPlayer(canvas, { onError, onTamanho } = {}) {
     base = null;
     ultimoTs = -Infinity;
     irregularidade = null;
+    ressincronizacoes = 0;
+    largadosNoDecode = 0;
+    desenhadosTotal = 0;
     if (canvas.width && canvas.height) {
       ctx.fillStyle = '#000';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -326,7 +406,31 @@ export function createPlayer(canvas, { onError, onTamanho } = {}) {
     return n;
   }
 
-  return { start, push, stop, getLag, getJitter, takeFrameCount, getSizes };
+  /**
+   * O estado interno que explica um travamento, para o diagnóstico e para o
+   * relatório que vai ao painel.
+   *
+   * `fila` e `decode` são as duas filas do caminho de quem assiste; `resync` e
+   * `largados` são o que elas já custaram. Numa transmissão saudável os quatro
+   * ficam baixos e parados — é o movimento deles que aponta o culpado sem
+   * precisar de ninguém com o devtools aberto na hora certa.
+   */
+  function getSaude() {
+    return {
+      desenhados: desenhadosTotal,
+      fila: fila.length,
+      decode: decoder?.decodeQueueSize ?? 0,
+      resync: ressincronizacoes,
+      largados: largadosNoDecode,
+      lag: Math.max(0, Math.round(lastLagMs)),
+      jitter: irregularidade,
+      // Sem decodificador configurado não há imagem possível, e é um estado
+      // que de fora não se distingue de "a rede não trouxe nada".
+      decoder: decoder?.state ?? 'ausente',
+    };
+  }
+
+  return { start, push, stop, getLag, getJitter, takeFrameCount, getSizes, getSaude };
 }
 
 function deserialize(c) {
