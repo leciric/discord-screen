@@ -373,6 +373,10 @@ export function createRoom({
     controles: new Set(),
     droppedChunks: 0,
     traffic: trafficCounter(),
+    // O quadro branco da sala. Vive fora das transmissões de propósito: ele
+    // existe quando não há tela nenhuma no ar, que é justamente quando as
+    // pessoas mais precisam de um lugar para desenhar junto.
+    quadro: novaAnn(),
   };
 
   rooms.set(id, room);
@@ -972,7 +976,7 @@ export function watch(room, ws, slot) {
   // O que já está desenhado é estado da tela, não histórico: quem chega no meio
   // precisa ver a mesma seta que todo mundo está olhando.
   if (entry.ann.tracos.size) {
-    sendJson(ws, { type: 'ann-sync', slot, tracos: snapshotAnn(entry) });
+    sendJson(ws, { type: 'ann-sync', slot, tracos: snapshotAnn(entry.ann) });
   }
   requestKeyframe(entry);
 
@@ -1003,8 +1007,8 @@ function novaAnn() {
 }
 
 /** Estado desenhado, no formato que a camada do cliente consome direto. */
-function snapshotAnn(entry) {
-  return [...entry.ann.tracos.entries()].map(([id, t]) => ({
+function snapshotAnn(ann) {
+  return [...ann.tracos.entries()].map(([id, t]) => ({
     id,
     uid: t.uid,
     name: t.name,
@@ -1099,8 +1103,7 @@ function podeLimparTudo(room, entry, userId) {
  * sai daqui: repassar o que o servidor não guardou deixaria quem já está na
  * sala com um traço que ninguém mais vai receber ao entrar.
  */
-function registrarAnn(entry, info, ev) {
-  const ann = entry.ann;
+function registrarAnn(ann, info, ev) {
   const chave = `${info.id}:${ev.id}`;
 
   switch (ev.k) {
@@ -1154,7 +1157,10 @@ function registrarAnn(entry, info, ev) {
     }
 
     case 'ca':
-      entry.ann = novaAnn();
+      // Esvaziar no lugar, e não trocar por um `novaAnn()`: quem chama guarda a
+      // ann numa propriedade que este módulo não conhece mais.
+      ann.tracos.clear();
+      ann.pontos = 0;
       return true;
 
     default:
@@ -1197,8 +1203,8 @@ export function pushAnn(room, ws, slot, evBruto) {
   if (!ev) return;
   if (ev.k === 'ca' && !podeLimparTudo(room, entry, info.id)) return;
 
-  if (!registrarAnn(entry, info, ev)) {
-    avisarQuadroCheio(ws, entry, ev);
+  if (!registrarAnn(entry.ann, info, ev)) {
+    avisarQuadroCheio(ws, entry.ann, ev);
     return;
   }
 
@@ -1209,14 +1215,76 @@ export function pushAnn(room, ws, slot, evBruto) {
   send(entry.ws, msg);
 }
 
+// ------------------------------------------------------------ quadro branco
+
+/**
+ * O quadro da sala: o mesmo desenho, sem uma tela por baixo.
+ *
+ * É a mesma máquina das anotações — mesma validação, mesmos tetos, mesma grade
+ * normalizada — com duas diferenças que decidem tudo:
+ *
+ * 1. **Não pertence a transmissão nenhuma.** As anotações moram no `entry`
+ *    porque só existem sobre a tela de alguém, e somem com ela. O quadro é da
+ *    sala: ele continua lá quando ninguém está mostrando nada, que é justamente
+ *    quando ele serve para alguma coisa.
+ * 2. **Vai para todo mundo, sem opt-in.** Assistir é opt-in porque quadro de
+ *    vídeo custa megabits; um traço custa dezenas de bytes, e um quadro que só
+ *    parte da sala vê não é um quadro, é um mal-entendido.
+ *
+ * A grade é a mesma 0..4095 nos dois eixos, e o cliente a desenha numa folha de
+ * proporção fixa. É isso que faz o traço cair no mesmo lugar em quem está no
+ * celular deitado e em quem está num monitor ultrawide — normalizar contra a
+ * janela de cada um entortaria o desenho em todo mundo menos em quem desenhou.
+ */
+export function pushQuadro(room, ws, evBruto) {
+  const info = ws.__info;
+  if (!info) return;
+  if (!permitirEvento(ws)) return;
+
+  const ev = validarEvento(evBruto);
+  if (!ev) return;
+  // Apagar o desenho de todo mundo é de quem criou a sala. Cada um limpa o seu
+  // com `c` e desfaz o último com `u`, que não pedem permissão nenhuma.
+  if (ev.k === 'ca' && room.ownerId !== info.id) return;
+
+  if (!registrarAnn(room.quadro, info, ev)) {
+    avisarQuadroCheio(ws, room.quadro, ev);
+    return;
+  }
+
+  const msg = JSON.stringify({ type: 'quadro', uid: info.id, name: info.name, ev });
+  for (const v of room.viewers) send(v, msg);
+}
+
+/** O que já está desenhado, para quem acabou de chegar. */
+export function quadroSync(room, ws) {
+  if (!room.quadro.tracos.size) return;
+  sendJson(ws, { type: 'quadro-sync', tracos: snapshotAnn(room.quadro) });
+}
+
+/** Apaga o quadro inteiro. Usado pelo painel; a sala usa o evento `ca`. */
+export function limparQuadro(room) {
+  const tinha = room.quadro.tracos.size;
+  room.quadro.tracos.clear();
+  room.quadro.pontos = 0;
+  if (tinha) toViewers(room, { type: 'quadro-sync', tracos: [] });
+  return tinha;
+}
+
+/** Quantos traços e pontos o quadro guarda. Para o painel. */
+export const quadroResumo = (room) => ({
+  tracos: room.quadro.tracos.size,
+  pontos: room.quadro.pontos,
+});
+
 /**
  * Traço recusado por teto some da tela de quem desenhou sem explicação nenhuma.
  * O aviso é limitado a um a cada cinco segundos porque a recusa se repete a
  * cada movimento do mouse.
  */
-function avisarQuadroCheio(ws, entry, ev) {
+function avisarQuadroCheio(ws, ann, ev) {
   if (ev.k !== 's' && ev.k !== 'a') return;
-  if (entry.ann.pontos < MAX_PONTOS_TOTAL * 0.9) return;
+  if (ann.pontos < MAX_PONTOS_TOTAL * 0.9) return;
 
   const agora = Date.now();
   if (agora - (ws.__annAviso ?? 0) < 5000) return;
@@ -1335,6 +1403,9 @@ export function attachViewer(room, ws, info) {
   marcarSemDono(room);
 
   sendJson(ws, roomState(room));
+  // O quadro é estado da sala, não histórico: quem chega no meio precisa ver o
+  // mesmo desenho que todo mundo está olhando.
+  quadroSync(room, ws);
 
   // Anuncia o que está no ar, sem começar a mandar quadros: assistir é opt-in.
   for (const entry of room.broadcasters.values()) {

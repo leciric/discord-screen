@@ -136,9 +136,10 @@ máquinas diferentes, aproximado.
 
 Controle vai em JSON: `start`, `config`, `audio-config`, `stop`, `rtc`
 (transmissor → servidor); `watch`, `unwatch`, `rename`, `stop-broadcast`, `ann`,
-`rtc`, `rtc-ativo` (espectador → servidor); `state`, `stream-start`, `config`,
-`audio-config`, `stream-stop`, `need-keyframe`, `stop-request`, `rtc-want`,
-`rtc`, `rtc-bye`, `chunks`, `ann`, `ann-sync`, `error` (servidor → clientes).
+`quadro`, `rtc`, `rtc-ativo` (espectador → servidor); `state`, `stream-start`,
+`config`, `audio-config`, `stream-stop`, `need-keyframe`, `stop-request`,
+`rtc-want`, `rtc`, `rtc-bye`, `chunks`, `ann`, `ann-sync`, `quadro`,
+`quadro-sync`, `error` (servidor → clientes).
 
 As anotações (`ann`) carregam coordenadas normalizadas ao quadro, em inteiros de
 0 a 4095 — não em pixels de tela. Cada pessoa assiste num tamanho e num zoom
@@ -146,6 +147,41 @@ diferentes, e um traço em pixels chegaria torto em todo mundo menos em quem
 desenhou. O servidor guarda os traços de cada transmissão para mandar em
 `ann-sync` a quem chega no meio; o laser não é guardado, ele se refaz no quadro
 seguinte.
+
+## O quadro branco
+
+O mesmo desenho das anotações, sem uma tela por baixo. A máquina é a mesma —
+mesma validação, mesmos tetos, mesma grade de 0 a 4095 —, e as diferenças são
+duas, e são elas que decidem se é um quadro ou um mal-entendido:
+
+- **Pertence à sala, não a uma transmissão.** As anotações moram no `entry` do
+  transmissor porque só existem sobre a tela de alguém, e somem com ela. O
+  quadro é da sala: ele continua lá quando ninguém está mostrando nada, que é
+  exatamente quando ele serve para alguma coisa.
+- **Vai para todo mundo, sem opt-in.** Assistir é opt-in porque quadro de vídeo
+  custa megabits. Um traço custa dezenas de bytes, e um quadro que só metade da
+  sala vê não é um quadro.
+
+A folha tem **proporção fixa** e é centrada na caixa, com o mesmo `conter()` que
+posiciona o vídeo. Isso não é estética: as coordenadas viajam normalizadas à
+folha, e normalizar contra a janela de cada um faria o mesmo traço chegar
+espremido em quem está deitado no celular e esticado em quem está no ultrawide.
+Com a folha fixa, todo mundo aponta para o mesmo lugar.
+
+A camada do quadro nasce com a sessão e nunca morre, mesmo com o quadro fechado:
+o estado chega pelo socket o tempo todo, e abrir precisa mostrar o que já está
+lá em vez de uma folha em branco que só se enche no traço seguinte. Pintar,
+porém, ela só pinta quando a caixa tem tamanho — fechada, o `vista()` devolve
+null e a camada suspende sozinha.
+
+Estar no quadro **desliga o `autoAssistir`**. Quem está desenhando não está
+olhando tela nenhuma, e baixar megabits para um canvas que ninguém vê é a única
+coisa pior do que não baixá-los. Voltar religa o que estiver no ar.
+
+Apagar o desenho de todo mundo é de quem criou a sala. Cada um limpa o seu e
+desfaz o último sem pedir permissão a ninguém — é o mesmo desenho da tela, com o
+dono da transmissão trocado pelo dono da sala, porque aqui não há transmissão
+para ter dono.
 
 ## WebRTC por cima do relay
 
@@ -305,7 +341,7 @@ shared/
   rtc.js          conexão direta por WebRTC, por cima do relay
   estudio.js      a câmera antes do encoder: fundo trocado, ou um GIF no lugar
   animacao.js     GIF decodificado quadro a quadro, com relógio próprio
-  anotacoes.js    estado e desenho do laser e da caneta
+  anotacoes.js    estado e desenho do laser e da caneta — e do quadro branco
   flutuar.js      a janela por cima de tudo (composição + Picture-in-Picture)
   porta.js        a porta padrão, num lugar só
 scripts/

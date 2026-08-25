@@ -1,0 +1,30 @@
+- generic [ref=e2]:
+  - generic [ref=e3]:
+    - banner [ref=e4]:
+      - generic [ref=e5]:
+        - heading "Salas" [level=1] [ref=e6]
+        - paragraph [ref=e7]: Neste canal de voz
+      - generic [ref=e8]:
+        - button "C2 Convidado 2801" [ref=e9] [cursor=pointer]:
+          - generic [ref=e10]: C2
+          - generic [ref=e11]: Convidado 2801
+        - button "Entrar com Discord" [ref=e12] [cursor=pointer]
+        - button "Criar sala" [ref=e13] [cursor=pointer]
+    - generic [ref=e14]: Nenhuma sala aberta. Crie a primeira.
+  - dialog [ref=e20]:
+    - heading "Criar sala" [level=2] [ref=e21]
+    - paragraph [ref=e22]: A sala fecha sozinha quando fica vazia por alguns minutos.
+    - generic [ref=e23]:
+      - generic [ref=e24]:
+        - text: Nome
+        - emphasis [ref=e25]: (opcional)
+      - textbox "Nome (opcional)" [active] [ref=e26]
+    - generic [ref=e27]:
+      - generic [ref=e28]:
+        - text: Senha
+        - emphasis [ref=e29]: (opcional)
+      - textbox "Senha (opcional)" [ref=e30]
+    - generic [ref=e31]:
+      - button "Cancelar" [ref=e32] [cursor=pointer]
+      - button "Criar" [ref=e33] [cursor=pointer]
+  - generic [ref=e16]: Compartilhar tela Ligar câmera Quadro branco · Q Silenciar Assistir no site Tela cheia Senha da sala Sair da sala

@@ -1134,6 +1134,14 @@ function handleViewer(ws, room, auth) {
       return;
     }
 
+    // O mesmo desenho, no quadro branco da sala: sem slot, porque não há tela
+    // por baixo. Vai para todo mundo — um quadro que só parte da sala vê não é
+    // um quadro.
+    if (msg.type === 'quadro') {
+      R.pushQuadro(room, ws, msg.ev);
+      return;
+    }
+
     // Encerrar a própria transmissão de dentro da Activity, sem ter que achar
     // a aba de captura. Cada um só encerra a sua.
     // Ligar a outra fonte sem abrir uma segunda aba: quem já está transmitindo

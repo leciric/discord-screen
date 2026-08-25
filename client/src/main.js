@@ -123,6 +123,14 @@ let esconderTracos = read('annEsconder') === '1';
 // Ids de traço só precisam ser únicos dentro de uma pessoa: o servidor os
 // namespaceia com o id de quem desenhou.
 let seqTraco = 0;
+
+// A superfície do quadro branco, montada uma vez e mantida viva pela sessão
+// inteira. Ela guarda o desenho mesmo com o quadro fechado: o estado chega pelo
+// socket o tempo todo, e abrir precisa mostrar o que já está lá em vez de uma
+// folha em branco que só se enche no traço seguinte.
+let quadro = null;
+// O quadro está ocupando a tela agora?
+let noQuadro = false;
 // Arrastar, desenhar e apontar terminam num clique que o navegador entrega ao
 // tile — e o tile alterna a tela cheia. Este relógio é o que separa um clique
 // de verdade do rastro de uma interação que já aconteceu.
@@ -393,6 +401,8 @@ function renderGrid() {
   // A barra é refeita a cada render, junto do tile do palco. Zerar aqui evita
   // que a referência sobreviva ao tile que a continha — sem palco não há barra.
   barra = null;
+  alvoQuadroAtual = null;
+  $('boardBox').querySelector('.tools')?.remove();
 
   const grid = $('grid');
 
@@ -401,10 +411,34 @@ function renderGrid() {
   // da lista de salas.
   if (!inRoom()) {
     grid.hidden = true;
+    $('board').hidden = true;
     $('empty').hidden = true;
     $('fullscreen').hidden = true;
     $('watchSite').hidden = true;
     $('app').classList.remove('cheia', 'flutua', 'palco');
+    return;
+  }
+
+  // O quadro ocupa o lugar da grade. Fica antes de tudo que decide palco e
+  // tela cheia: com o quadro no ar não há palco.
+  //
+  // Sair daqui cedo também tira o `autoAssistir` do caminho, e isso é de
+  // propósito: quem está no quadro não está olhando tela nenhuma, e baixar
+  // megabits para um canvas que ninguém vê é a única coisa pior do que não
+  // baixá-los. Ao voltar, o render completo religa o que estiver no ar.
+  $('board').hidden = !noQuadro;
+  if (noQuadro) {
+    grid.hidden = true;
+    $('empty').hidden = true;
+    $('fullscreen').hidden = true;
+    $('watchSite').hidden = true;
+    $('people').hidden = false;
+    $('app').classList.remove('cheia', 'palco');
+    $('app').classList.add('flutua');
+    if (!barra || barra.alvo !== alvoQuadroAtual) {
+      alvoQuadroAtual = alvoDoQuadro();
+      $('boardBox').append(buildFerramentas(alvoQuadroAtual));
+    }
     return;
   }
 
@@ -646,7 +680,7 @@ function buildTile(p, { palco = false, semVideo = false, slot: slotDado = null }
 
   if (stream) {
     tile.append(noDe(stream));
-    if (palco) tile.append(buildFerramentas(slot));
+    if (palco) tile.append(buildFerramentas(alvoDoPalco(slot)));
     tile.title = palco
       ? telaCheia
         ? 'Clique para sair da tela cheia'
@@ -1043,6 +1077,14 @@ function renderBar() {
   cam.dataset.tip = rotuloCam;
   cam.setAttribute('aria-label', rotuloCam);
 
+  // O quadro é da sala, então o botão só existe dentro de uma.
+  const bq = $('board-toggle');
+  bq.hidden = !inRoom();
+  bq.classList.toggle('live', noQuadro);
+  const rotuloQuadro = noQuadro ? 'Voltar às telas  ·  Q' : 'Quadro branco  ·  Q';
+  bq.dataset.tip = rotuloQuadro;
+  bq.setAttribute('aria-label', rotuloQuadro);
+
   // O controle de som só existe quando há som para controlar.
   const temSom = [...streams.values()].some((s) => s.audio);
   $('volumeBox').hidden = !temSom;
@@ -1347,11 +1389,388 @@ function definirFerramenta(f) {
 
   // Sai apontando: o ponto de quem trocou de ferramenta ficaria parado na tela
   // dos outros até o tempo de vida do laser acabar.
-  if (ferramenta === 'laser' && activeSlot !== null) emitir(activeSlot, { k: 'po' });
+  if (ferramenta === 'laser') {
+    if (noQuadro) emitirQuadro({ k: 'po' });
+    else if (activeSlot !== null) emitir(activeSlot, { k: 'po' });
+  }
 
   ferramenta = f;
   for (const s of streams.values()) s.surface.dataset.f = f;
+  if (quadro) quadro.box.dataset.f = f;
   sincronizarBarra();
+}
+
+// ------------------------------------------------------------ quadro branco
+
+/**
+ * Proporção da folha, em unidades arbitrárias.
+ *
+ * A folha tem proporção fixa e as coordenadas viajam normalizadas a ELA, não à
+ * janela de quem desenha. Sem isso, o mesmo traço chegaria espremido em quem
+ * está deitado no celular e esticado em quem está no ultrawide — a mesma razão
+ * pela qual as anotações se normalizam ao quadro do vídeo, e não ao tile.
+ *
+ * 16:9 porque é a forma da tela de quase todo mundo: a folha ocupa a área
+ * disponível com o mínimo de sobra dos dois lados.
+ */
+const FOLHA_W = 16;
+const FOLHA_H = 9;
+
+/** Monta a folha, a camada de tinta e os gestos. Uma vez por sessão. */
+function montarQuadro() {
+  if (quadro) return quadro;
+
+  const box = $('boardBox');
+  const paper = $('boardPaper');
+  const ink = $('boardInk');
+
+  const vazio = document.createElement('div');
+  vazio.className = 'board-vazio';
+  vazio.innerHTML =
+    '<strong>Quadro em branco</strong>Escolha a caneta e desenhe. Todo mundo na sala vê.';
+  paper.append(vazio);
+
+  quadro = {
+    box,
+    paper,
+    ink,
+    vazio,
+    zoom: { z: 1, tx: 0, ty: 0 },
+    camada: criarCamada(ink, { vista: vistaDoQuadro }),
+  };
+
+  quadro.camada.mostrar(!esconderTracos);
+  box.dataset.f = ferramenta;
+
+  // A caixa muda de tamanho ao entrar em tela cheia, ao girar o celular e ao
+  // redimensionar a janela — e nenhum desses caminhos passa por renderGrid.
+  quadro.observer = new ResizeObserver(() => {
+    limitarPanQuadro();
+    aplicarZoomQuadro();
+  });
+  quadro.observer.observe(box);
+
+  ligarInteracaoQuadro();
+  aplicarZoomQuadro();
+  return quadro;
+}
+
+/**
+ * Onde a folha está, em pixels da caixa — já com zoom e deslocamento.
+ *
+ * É a mesma conta que `vistaDe` faz para o vídeo, e por isso a camada de
+ * anotações, o `paraGrade` e o zoom funcionam aqui sem uma linha de diferença.
+ */
+function vistaDoQuadro() {
+  if (!quadro) return null;
+
+  const box = quadro.box.getBoundingClientRect();
+  if (!box.width || !box.height) return null;
+
+  const fit = conter(box.width, box.height, FOLHA_W, FOLHA_H);
+  const { z, tx, ty } = quadro.zoom;
+
+  return {
+    left: box.left,
+    top: box.top,
+    boxW: box.width,
+    boxH: box.height,
+    x: fit.x * z + tx,
+    y: fit.y * z + ty,
+    w: fit.w * z,
+    h: fit.h * z,
+  };
+}
+
+/** Põe a folha no lugar que a vista diz, e manda a tinta repintar em cima. */
+function aplicarZoomQuadro() {
+  if (!quadro) return;
+  const v = vistaDoQuadro();
+  if (!v) return;
+
+  Object.assign(quadro.paper.style, {
+    left: `${v.x}px`,
+    top: `${v.y}px`,
+    width: `${v.w}px`,
+    height: `${v.h}px`,
+  });
+  // A grade do papel acompanha a folha: em unidades da folha ela seria uma
+  // malha fixa que some no zoom para fora e vira listra no zoom para dentro.
+  quadro.paper.style.setProperty('--grade', `${Math.max(8, v.w / 32)}px`);
+
+  quadro.camada.repintar();
+  quadro.vazio.hidden = !quadro.camada.vazio();
+  if (noQuadro) mostrarZoom();
+}
+
+function limitarPanQuadro() {
+  if (!quadro) return;
+  const box = quadro.box.getBoundingClientRect();
+  if (!box.width) return;
+
+  const fit = conter(box.width, box.height, FOLHA_W, FOLHA_H);
+  quadro.zoom.tx = limitarEixo(quadro.zoom.tx, fit.x, fit.w, box.width, quadro.zoom.z);
+  quadro.zoom.ty = limitarEixo(quadro.zoom.ty, fit.y, fit.h, box.height, quadro.zoom.z);
+}
+
+function definirZoomQuadro(alvo, cx, cy) {
+  if (!quadro) return;
+  const box = quadro.box.getBoundingClientRect();
+  if (!box.width) return;
+
+  const z0 = quadro.zoom.z;
+  const z = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, alvo));
+  if (Math.abs(z - z0) < 0.001) return;
+
+  const fit = conter(box.width, box.height, FOLHA_W, FOLHA_H);
+  const bx = (cx ?? box.left + box.width / 2) - box.left;
+  const by = (cy ?? box.top + box.height / 2) - box.top;
+
+  // Guarda o ponto da folha que está sob o cursor e o recoloca lá depois de
+  // trocar a escala — a roda aproxima o que se está olhando, não o centro.
+  const u = (bx - (fit.x * z0 + quadro.zoom.tx)) / (fit.w * z0);
+  const v = (by - (fit.y * z0 + quadro.zoom.ty)) / (fit.h * z0);
+
+  quadro.zoom.z = z;
+  quadro.zoom.tx = bx - u * fit.w * z - fit.x * z;
+  quadro.zoom.ty = by - v * fit.h * z - fit.y * z;
+
+  limitarPanQuadro();
+  aplicarZoomQuadro();
+}
+
+function zerarZoomQuadro() {
+  if (!quadro) return;
+  quadro.zoom = { z: 1, tx: 0, ty: 0 };
+  aplicarZoomQuadro();
+}
+
+/** Quem apaga o quadro de todo mundo: quem criou a sala. */
+const podeLimparQuadro = () =>
+  Boolean(session?.user?.id) && lastRoomState?.ownerId === session.user.id;
+
+const alvoDoQuadro = () => ({
+  emitir: emitirQuadro,
+  zoomAtual: () => quadro?.zoom.z ?? 1,
+  definirZoom: (z) => definirZoomQuadro(z),
+  zerarZoom: zerarZoomQuadro,
+  podeLimparTudo: podeLimparQuadro,
+});
+
+/**
+ * Manda o evento e o desenha aqui na hora.
+ *
+ * O eco local existe pelo mesmo motivo das anotações: a volta pelo servidor é
+ * visível na ponta do lápis, e o traço apareceria alguns quadros atrás da mão.
+ */
+function emitirQuadro(ev) {
+  ws?.send(JSON.stringify({ type: 'quadro', ev }));
+  aplicarNoQuadro({ uid: session?.user?.id, name: session?.user?.name, ev });
+}
+
+function aplicarNoQuadro(msg) {
+  montarQuadro().camada.aplicar(msg);
+  quadro.vazio.hidden = !quadro.camada.vazio();
+}
+
+function sincronizarQuadro(tracos) {
+  montarQuadro().camada.sincronizar(tracos);
+  quadro.vazio.hidden = !quadro.camada.vazio();
+}
+
+/** Sai da sala: o quadro é da sala, e o da próxima não é o mesmo. */
+function limparQuadroLocal() {
+  if (!quadro) return;
+  quadro.camada.limpar();
+  quadro.vazio.hidden = false;
+  zerarZoomQuadro();
+}
+
+/** Entra e sai do quadro. O mesmo botão faz as duas coisas. */
+function alternarQuadro(ligar = !noQuadro) {
+  if (!inRoom()) return;
+  if (noQuadro === ligar) return;
+
+  noQuadro = ligar;
+  if (noQuadro) {
+    montarQuadro();
+    // Chegar no quadro com a mão vazia é chegar sem poder fazer a única coisa
+    // que se veio fazer. Quem já estava com uma ferramenta mantém a dele.
+    if (ferramenta === 'mover') definirFerramenta('caneta');
+  } else if (ferramenta === 'laser') {
+    // O ponto ficaria parado na tela de todo mundo até o laser expirar.
+    emitirQuadro({ k: 'po' });
+  }
+
+  renderGrid();
+  renderBar();
+  if (noQuadro) {
+    // Depois do render: antes dele a caixa ainda está `hidden` e mede zero,
+    // e a folha nasceria com tamanho nenhum.
+    aplicarZoomQuadro();
+    quadro.camada.repintar();
+  }
+}
+
+/**
+ * Roda, arrasto, pinça e desenho na folha.
+ *
+ * É o mesmo desenho do palco com duas coisas a menos: não há tile por baixo
+ * para promover ao destaque, então nenhum gesto precisa ser bloqueado, e não
+ * há transmissão, então não há o que fazer quando não existe zoom.
+ */
+function ligarInteracaoQuadro() {
+  const box = quadro.box;
+  const pontos = new Map();
+  let arrasto = null;
+  let traco = null;
+  let pinca = null;
+  let laserEm = 0;
+
+  const ponto = (e) => {
+    const v = vistaDoQuadro();
+    return v ? paraGrade(e.clientX - v.left, e.clientY - v.top, v) : null;
+  };
+
+  box.addEventListener(
+    'wheel',
+    (e) => {
+      e.preventDefault();
+      const passo =
+        e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
+      definirZoomQuadro(quadro.zoom.z * Math.exp(-passo / 400), e.clientX, e.clientY);
+    },
+    { passive: false },
+  );
+
+  box.addEventListener('pointerdown', (e) => {
+    pontos.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pontos.size === 2) return iniciarPinca();
+    if (pontos.size > 2) return;
+
+    // O botão do meio arrasta com qualquer ferramenta, como em qualquer mapa
+    // ou editor de imagem.
+    if (e.button === 1 || ferramenta === 'mover') {
+      e.preventDefault();
+      box.setPointerCapture(e.pointerId);
+      arrasto = {
+        x: e.clientX,
+        y: e.clientY,
+        tx: quadro.zoom.tx,
+        ty: quadro.zoom.ty,
+      };
+      box.classList.add('arrastando');
+      return;
+    }
+
+    if (e.button !== 0) return;
+    e.preventDefault();
+    box.setPointerCapture(e.pointerId);
+
+    if (ferramenta === 'caneta') iniciarTraco(e);
+    else if (ferramenta === 'laser') apontar(e, true);
+  });
+
+  box.addEventListener('pointermove', (e) => {
+    if (pontos.has(e.pointerId)) pontos.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinca) return moverPinca();
+
+    if (arrasto) {
+      quadro.zoom.tx = arrasto.tx + (e.clientX - arrasto.x);
+      quadro.zoom.ty = arrasto.ty + (e.clientY - arrasto.y);
+      limitarPanQuadro();
+      aplicarZoomQuadro();
+      return;
+    }
+
+    if (traco) return moverTraco(e);
+    // O laser segue o cursor sem apertar nada: é ponteiro, não pincel.
+    if (ferramenta === 'laser') apontar(e);
+  });
+
+  for (const tipo of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+    box.addEventListener(tipo, (e) => {
+      pontos.delete(e.pointerId);
+      if (pontos.size < 2) pinca = null;
+      if (arrasto) {
+        arrasto = null;
+        box.classList.remove('arrastando');
+      }
+      if (traco) terminarTraco();
+      // Num toque, o dedo que sai é o ponteiro que sumiu — deixar o laser aceso
+      // marcaria a folha de todo mundo com um ponto parado.
+      if (ferramenta === 'laser' && e.pointerType !== 'mouse') emitirQuadro({ k: 'po' });
+    });
+  }
+
+  box.addEventListener('pointerleave', () => {
+    if (ferramenta === 'laser') emitirQuadro({ k: 'po' });
+  });
+
+  box.addEventListener('dblclick', (e) => {
+    if (ferramenta !== 'mover') return;
+    e.preventDefault();
+    zerarZoomQuadro();
+  });
+
+  function apontar(e, forcar = false) {
+    const t = performance.now();
+    // 25 por segundo: acima disso o olho não distingue e o teto do servidor
+    // começa a ficar perto.
+    if (!forcar && t - laserEm < 40) return;
+    const p = ponto(e);
+    if (!p) return;
+    laserEm = t;
+    emitirQuadro({ k: 'p', x: p.x, y: p.y, c: corCaneta });
+  }
+
+  function iniciarTraco(e) {
+    const p = ponto(e);
+    if (!p?.dentro) return;
+    traco = { id: ++seqTraco, pendentes: [], ultimo: p, enviadoEm: performance.now() };
+    emitirQuadro({ k: 's', id: traco.id, c: corCaneta, w: espessura, pts: [p.x, p.y] });
+  }
+
+  function moverTraco(e) {
+    const p = ponto(e);
+    if (!p) return;
+    // Ponto que praticamente não andou só engorda o traço e o pacote. O limiar
+    // é na grade da folha, então vale igual com ou sem zoom.
+    if (Math.abs(p.x - traco.ultimo.x) < 4 && Math.abs(p.y - traco.ultimo.y) < 4) return;
+
+    traco.ultimo = p;
+    traco.pendentes.push(p.x, p.y);
+    if (traco.pendentes.length >= 12 || performance.now() - traco.enviadoEm > 60) descarregar();
+  }
+
+  function descarregar() {
+    // 64 pares é o teto que o servidor aceita por mensagem.
+    while (traco?.pendentes.length) {
+      emitirQuadro({ k: 'a', id: traco.id, pts: traco.pendentes.splice(0, 128) });
+    }
+    if (traco) traco.enviadoEm = performance.now();
+  }
+
+  function terminarTraco() {
+    descarregar();
+    emitirQuadro({ k: 'e', id: traco.id });
+    traco = null;
+  }
+
+  function iniciarPinca() {
+    if (traco) terminarTraco();
+    arrasto = null;
+    box.classList.remove('arrastando');
+    const [a, b] = [...pontos.values()];
+    pinca = { d: Math.hypot(a.x - b.x, a.y - b.y), z: quadro.zoom.z };
+  }
+
+  function moverPinca() {
+    const [a, b] = [...pontos.values()];
+    if (!a || !b || !pinca.d) return;
+    const d = Math.hypot(a.x - b.x, a.y - b.y);
+    definirZoomQuadro(pinca.z * (d / pinca.d), (a.x + b.x) / 2, (a.y + b.y) / 2);
+  }
 }
 
 // -------------------------------------------------------- pointer no palco
@@ -1594,12 +2013,34 @@ const distancia = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
  * controle que ninguém acha.
  */
 let barra = null;
+// O alvo do quadro vivo neste render. Guardado para o renderGrid saber que a
+// barra que está no DOM é a dele, e não a de um palco que acabou de sair.
+let alvoQuadroAtual = null;
 
-function buildFerramentas(slot) {
+/**
+ * A barra de ferramentas, uma só para o palco e para o quadro.
+ *
+ * Ela não conhece slot nem transmissão: recebe um `alvo`, que é a lista curta
+ * do que uma superfície desenhável precisa saber fazer — emitir um evento,
+ * aproximar, dizer se quem está ali pode apagar o desenho dos outros. Duas
+ * cópias divergiriam na primeira correção, exatamente como no broadcaster.
+ */
+/** O que a barra precisa saber sobre uma tela do palco. */
+const alvoDoPalco = (slot) => ({
+  emitir: (ev) => emitir(slot, ev),
+  zoomAtual: () => zoomAtual(slot),
+  definirZoom: (z) => definirZoom(slot, z),
+  zerarZoom: () => zerarZoom(slot),
+  flutuar: () => alternarFlutuante(slot),
+  flutuando: () => Boolean(streams.get(slot)?.flutuante),
+  podeLimparTudo,
+});
+
+function buildFerramentas(alvo) {
   const el = document.createElement('div');
   el.className = 'tools';
   el.setAttribute('role', 'toolbar');
-  el.setAttribute('aria-label', 'Ferramentas da tela');
+  el.setAttribute('aria-label', 'Ferramentas de desenho');
 
   // Cliques daqui não podem chegar ao tile: lá embaixo eles alternariam a tela
   // cheia a cada botão apertado.
@@ -1668,44 +2109,41 @@ function buildFerramentas(slot) {
   el.append(
     criar('esconder', 'Esconder os desenhos  ·  O', ICONES.olho, () => alternarTracos()),
     criar('desfazer', 'Desfazer meu último traço  ·  Ctrl+Z', ICONES.desfazer, () =>
-      emitir(slot, { k: 'u' }),
+      alvo.emitir({ k: 'u' }),
     ),
-    criar('apagar', 'Apagar tudo que eu desenhei', ICONES.apagar, () => emitir(slot, { k: 'c' })),
+    criar('apagar', 'Apagar tudo que eu desenhei', ICONES.apagar, () => alvo.emitir({ k: 'c' })),
     criar('apagarTudo', 'Limpar os desenhos de todo mundo', ICONES.apagarTudo, () =>
-      emitir(slot, { k: 'ca' }),
+      alvo.emitir({ k: 'ca' }),
     ),
   );
 
-  // Só aparece onde o navegador tem PiP. Dentro do iframe da Activity o
-  // Discord pode negar a permissão, e um botão que só sabe dar erro é pior do
-  // que botão nenhum.
-  if (flutuarDisponivel()) {
+  // Só aparece onde o navegador tem PiP, e só onde há vídeo para flutuar. Um
+  // botão que só sabe dar erro é pior do que botão nenhum.
+  if (alvo.flutuar && flutuarDisponivel()) {
     el.append(
       separador(),
-      criar('flutuar', 'Manter numa janela por cima de tudo', ICONES.flutuar, () =>
-        alternarFlutuante(slot),
-      ),
+      criar('flutuar', 'Manter numa janela por cima de tudo', ICONES.flutuar, () => alvo.flutuar()),
     );
   }
 
   el.append(separador());
 
   const menos = criar('menos', 'Afastar  ·  −', ICONES.menos, () =>
-    definirZoom(slot, zoomAtual(slot) / 1.4),
+    alvo.definirZoom(alvo.zoomAtual() / 1.4),
   );
 
   const nivel = document.createElement('button');
   nivel.className = 'tool tool-zoom';
   nivel.dataset.tip = 'Voltar ao tamanho normal  ·  0';
-  nivel.addEventListener('click', () => zerarZoom(slot));
+  nivel.addEventListener('click', () => alvo.zerarZoom());
 
   const mais = criar('mais', 'Aproximar  ·  +', ICONES.mais, () =>
-    definirZoom(slot, zoomAtual(slot) * 1.4),
+    alvo.definirZoom(alvo.zoomAtual() * 1.4),
   );
 
   el.append(menos, nivel, mais);
 
-  barra = { el, botoes, cores, swatches, grossuras, nivel };
+  barra = { el, botoes, cores, swatches, grossuras, nivel, alvo };
   sincronizarBarra();
   return el;
 }
@@ -1750,9 +2188,9 @@ function sincronizarBarra() {
   barra.botoes.esconder.dataset.tip = rotuloOlho;
   barra.botoes.esconder.setAttribute('aria-label', rotuloOlho);
 
-  barra.botoes.apagarTudo.hidden = !podeLimparTudo();
+  barra.botoes.apagarTudo.hidden = !barra.alvo.podeLimparTudo();
   // O mesmo botão abre e fecha, e precisa dizer qual dos dois vai fazer.
-  const flutuando = Boolean(activeSlot !== null && streams.get(activeSlot)?.flutuante);
+  const flutuando = Boolean(barra.alvo.flutuando?.());
   if (barra.botoes.flutuar) {
     barra.botoes.flutuar.classList.toggle('ativo', flutuando);
     const rotulo = flutuando ? 'Fechar a janela flutuante' : 'Manter numa janela por cima de tudo';
@@ -1767,15 +2205,16 @@ function sincronizarBarra() {
  * fica firme enquanto houver ferramenta escolhida ou aproximação aplicada.
  */
 function firmarBarra() {
-  barra?.el.classList.toggle(
+  if (!barra) return;
+  barra.el.classList.toggle(
     'fixa',
-    ferramenta !== 'mover' || zoomAtual(activeSlot) > 1 || esconderTracos,
+    ferramenta !== 'mover' || barra.alvo.zoomAtual() > 1 || esconderTracos,
   );
 }
 
 function mostrarZoom() {
-  if (!barra || activeSlot === null) return;
-  const z = zoomAtual(activeSlot);
+  if (!barra) return;
+  const z = barra.alvo.zoomAtual();
   barra.nivel.textContent = `${Math.round(z * 100)}%`;
   barra.nivel.classList.toggle('ativo', z > 1);
   firmarBarra();
@@ -2546,6 +2985,10 @@ function limparSala() {
   lastRoomState = null;
   activeSlot = null;
   telaCheia = false;
+  // O quadro é da sala: o da próxima não é o mesmo, e deixar o desenho antigo
+  // na folha faria parecer que ele veio de lá.
+  noQuadro = false;
+  limparQuadroLocal();
 
   if (roomInfo) remove(`sala:${roomInfo.id}`);
   roomTokens = null;
@@ -3047,6 +3490,13 @@ function connect() {
         if (!streams.has(msg.slot)) openStream(msg.slot, info?.userId ?? msg.slot);
         startStream(msg.slot, msg.config);
       }
+    } else if (msg.type === 'quadro') {
+      // O meu já foi desenhado no eco local; redesenhar a volta do servidor
+      // duplicaria o traço no primeiro pacote reordenado.
+      if (msg.uid !== session?.user?.id) aplicarNoQuadro(msg);
+    } else if (msg.type === 'quadro-sync') {
+      // Estado de quem chegou no meio, e também a limpeza feita pelo painel.
+      sincronizarQuadro(msg.tracos);
     } else if (msg.type === 'ann') {
       // O meu já foi desenhado no eco local; redesenhar a volta do servidor
       // duplicaria o traço no primeiro pacote reordenado.
@@ -3595,7 +4045,10 @@ window.addEventListener('keydown', (e) => {
   if (telaCheia) {
     telaCheia = false;
     renderGrid();
+    return;
   }
+
+  if (noQuadro) alternarQuadro(false);
 });
 
 /**
@@ -3606,7 +4059,8 @@ window.addEventListener('keydown', (e) => {
  * roubar um `c` digitado numa senha.
  */
 window.addEventListener('keydown', (e) => {
-  if (!inRoom() || activeSlot === null || e.altKey || e.metaKey) return;
+  // No quadro não há palco, e é justamente lá que as ferramentas mais servem.
+  if (!inRoom() || (activeSlot === null && !noQuadro) || e.altKey || e.metaKey) return;
   if (
     e.target instanceof Element &&
     e.target.closest('input, select, textarea, [contenteditable]')
@@ -3615,11 +4069,20 @@ window.addEventListener('keydown', (e) => {
   }
   if (document.querySelector('.modal:not([hidden])')) return;
 
+  // Uma superfície de cada vez: o que está na tela é quem recebe.
+  const alvo = noQuadro ? alvoDoQuadro() : alvoDoPalco(activeSlot);
+
   if (e.ctrlKey) {
     if (e.key.toLowerCase() === 'z') {
       e.preventDefault();
-      emitir(activeSlot, { k: 'u' });
+      alvo.emitir({ k: 'u' });
     }
+    return;
+  }
+
+  if (e.key.toLowerCase() === 'q') {
+    alternarQuadro();
+    e.preventDefault();
     return;
   }
 
@@ -3638,20 +4101,22 @@ window.addEventListener('keydown', (e) => {
       break;
     case '+':
     case '=':
-      definirZoom(activeSlot, zoomAtual(activeSlot) * 1.4);
+      alvo.definirZoom(alvo.zoomAtual() * 1.4);
       break;
     case '-':
     case '_':
-      definirZoom(activeSlot, zoomAtual(activeSlot) / 1.4);
+      alvo.definirZoom(alvo.zoomAtual() / 1.4);
       break;
     case '0':
-      zerarZoom();
+      alvo.zerarZoom();
       break;
     default:
       return;
   }
   e.preventDefault();
 });
+
+$('board-toggle').addEventListener('click', () => alternarQuadro());
 
 /**
  * Diagnóstico: tenta capturar a tela direto de dentro do iframe.

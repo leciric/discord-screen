@@ -29,7 +29,11 @@ body {
 body {
   background: var(--bg);
   color: var(--text);
-  font: 15px/1.5 "gg sans", "Segoe UI", system-ui, sans-serif;
+  font:
+    15px/1.5 'gg sans',
+    'Segoe UI',
+    system-ui,
+    sans-serif;
   overflow: hidden;
 }
 
@@ -236,7 +240,9 @@ body {
   border-radius: 999px;
   background: var(--line);
   opacity: 0;
-  transition: opacity 0.15s, background 0.15s;
+  transition:
+    opacity 0.15s,
+    background 0.15s;
 }
 
 .divider:hover::before,
@@ -385,7 +391,9 @@ body {
   font: 600 12px/1 inherit;
   font-variant-numeric: tabular-nums;
   position: relative;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .tool:hover {
@@ -443,7 +451,9 @@ body {
   border: 2px solid transparent;
   border-radius: 50%;
   background: var(--cor);
-  transition: transform 0.12s, border-color 0.12s;
+  transition:
+    transform 0.12s,
+    border-color 0.12s;
 }
 
 .cor:hover {
@@ -525,7 +535,9 @@ body {
   background: rgba(0, 0, 0, 0.65);
   color: #fff;
   opacity: 0;
-  transition: opacity 0.15s, background 0.15s;
+  transition:
+    opacity 0.15s,
+    background 0.15s;
 }
 
 .tile:hover .tile-stop {
@@ -1033,7 +1045,9 @@ button {
   background: var(--tile);
   color: var(--text);
   font: 500 14px/1 inherit;
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .btn svg {
@@ -1234,7 +1248,9 @@ button {
   text-align: left;
   color: var(--text);
   font: inherit;
-  transition: border-color 0.15s, background 0.15s;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
 }
 
 .room-card:hover {
@@ -1634,4 +1650,107 @@ button {
 .toast.error {
   border-color: var(--danger);
   color: #ffb3b6;
+}
+
+/* ------------------------------------------------------------- quadro branco */
+
+/*
+ * O quadro ocupa o lugar da grade, e não uma camada por cima dela: quem entra
+ * no quadro entrou para desenhar, e uma tela de vídeo por baixo só disputaria
+ * atenção com o desenho. Sair é o mesmo botão que entrou.
+ */
+.board {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  padding: 10px;
+}
+
+/*
+ * A caixa é toda a área disponível; a folha é um retângulo de proporção fixa
+ * centrado dentro dela. A separação existe porque as coordenadas viajam
+ * normalizadas à FOLHA: normalizar contra a janela de cada um faria o mesmo
+ * traço chegar espremido em quem está deitado no celular e esticado em quem
+ * está no ultrawide.
+ */
+.board-box {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 12px;
+  touch-action: none;
+}
+
+.board-paper {
+  position: absolute;
+  /* Posicionado por JS: é a mesma conta de `conter()` que o vídeo usa. */
+  transform-origin: 0 0;
+  background: #f7f7f5;
+  border-radius: 6px;
+  box-shadow:
+    0 10px 40px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(255, 255, 255, 0.06);
+  /* Papel milimetrado bem fraco: dá noção de escala com o zoom sem competir
+     com o traço. O gradiente é do CSS, então ele não custa canvas nenhum. */
+  background-image:
+    linear-gradient(rgba(90, 100, 120, 0.09) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(90, 100, 120, 0.09) 1px, transparent 1px);
+  background-size:
+    var(--grade, 40px) var(--grade, 40px),
+    var(--grade, 40px) var(--grade, 40px);
+}
+
+.board-ink {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  background: transparent;
+  pointer-events: none;
+}
+
+.board-box[data-f='caneta'] {
+  cursor: crosshair;
+}
+
+.board-box[data-f='laser'] {
+  cursor: cell;
+}
+
+.board-box[data-f='mover'] {
+  cursor: grab;
+}
+
+.board-box.arrastando[data-f='mover'] {
+  cursor: grabbing;
+}
+
+/* A barra do quadro é a mesma do palco, e a única diferença é onde ela mora:
+   aqui não há tile que a contenha, então ela se prende à caixa. */
+.board .tools {
+  top: 12px;
+}
+
+/* Ninguém desenhou ainda: dizer isso é melhor que uma folha em branco que não
+   se distingue de uma que não carregou. Some no primeiro traço. */
+.board-vazio {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  color: #7b8598;
+  font-size: 13px;
+  line-height: 1.6;
+  pointer-events: none;
+  user-select: none;
+}
+
+.board-vazio strong {
+  display: block;
+  font-size: 15px;
+  color: #55607a;
+  margin-bottom: 4px;
 }

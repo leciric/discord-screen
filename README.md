@@ -212,6 +212,28 @@ todo mundo**. Trocar a tela compartilhada também limpa.
 
 ---
 
+## Quadro branco
+
+O botão do quadrinho na barra de baixo — ou a tecla **Q** — troca as telas por
+uma folha em branco. Todo mundo na sala desenha nela ao mesmo tempo, com as
+mesmas ferramentas da tela: caneta, laser, cores, espessura, desfazer.
+
+A folha é a mesma para todo mundo. Quem está no celular deitado e quem está num
+monitor largo veem o traço no mesmo lugar — a folha tem proporção fixa, e é ela
+que serve de referência, não o tamanho da janela de cada um.
+
+Quem chega no meio encontra o que já está desenhado. **Q** de novo, ou Esc,
+volta para as telas — e o que estava no quadro continua lá.
+
+> Enquanto o quadro está aberto você não baixa a tela de ninguém. É de
+> propósito: você não está olhando para ela, e a banda faz falta em outro lugar.
+> Ao voltar, o que estiver no ar volta sozinho.
+
+Quem criou a sala tem o botão de **limpar o quadro de todo mundo**. Apagar o que
+você mesmo desenhou não pede permissão a ninguém.
+
+---
+
 ## Compartilhando com som
 
 O som é sempre pedido — não há nada para ligar antes. Na janela que o navegador
