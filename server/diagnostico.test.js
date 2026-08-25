@@ -54,6 +54,28 @@ describe('classificação', () => {
     expect(r.estado).toBe('sem-decodificador');
   });
 
+  it('e diz QUAL codec foi recusado, senao manda adivinhar', () => {
+    // Foi exatamente o que faltou na primeira vez que isto apareceu em
+    // producao: dezenas de "sem-decodificador" sem dizer de que, e a resposta
+    // (H.264? VP9? VP8?) muda completamente o que se conserta.
+    const r = registrarRelato(
+      relato({ saude: { desenhados: 0, decoder: 'ausente', codec: 'vp09.00.41.08' } }),
+    );
+
+    expect(r.codec).toBe('vp09.00.41.08');
+    const linha = EV.listar({ escopo: 'cliente' }).eventos.at(-1);
+    expect(linha.mensagem).toContain('vp09.00.41.08');
+    expect(linha.dados.codec).toBe('vp09.00.41.08');
+  });
+
+  it('quem nao vai ver nada aparece na frente de quem travou', () => {
+    registrarRelato(relato({ peer: 'travou' }));
+    registrarRelato(relato({ peer: 'travou' }));
+    registrarRelato(relato({ peer: 'sem-codec', saude: { desenhados: 0, decoder: 'ausente' } }));
+
+    expect(relatorio().espectadores[0].peer).toBe('sem-codec');
+  });
+
   it('o contador que não anda entre dois boletins é o travamento de verdade', () => {
     registrarRelato(relato());
     expect(registrarRelato(relato()).estado).toBe('travado');

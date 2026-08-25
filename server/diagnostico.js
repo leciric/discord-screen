@@ -111,6 +111,10 @@ export function registrarRelato({ sala, peer, slot, nome = null, via = 'relay', 
     lag: inteiro(saude.lag),
     jitter: saude.jitter === null || saude.jitter === undefined ? null : inteiro(saude.jitter),
     decoder: typeof saude.decoder === 'string' ? saude.decoder.slice(0, 20) : null,
+    // Qual codec aquele navegador tentou montar. Sem isto, "sem-decodificador"
+    // manda quem investiga adivinhar entre H.264, VP9 e VP8 — e a resposta
+    // muda completamente o que se conserta.
+    codec: typeof saude.codec === 'string' ? saude.codec.slice(0, 32) : null,
     em: agora,
   };
 
@@ -127,7 +131,11 @@ export function registrarRelato({ sala, peer, slot, nome = null, via = 'relay', 
   if (!anterior || anterior.estado !== atual.estado) {
     const quem = atual.nome ?? atual.peer;
     const nivel = atual.estado === 'ok' ? 'info' : 'aviso';
-    registrar(nivel, 'cliente', `[room ${sala}] ${quem} · tela ${slot}: ${atual.estado}`, {
+    // O codec entra no texto, e não só nos dados: quem lê o log corrido precisa
+    // ver "sem-decodificador (vp09…)" sem ter de abrir a linha.
+    const porque = atual.codec ? ` (${atual.codec})` : '';
+    registrar(nivel, 'cliente', `[room ${sala}] ${quem} · tela ${slot}: ${atual.estado}${porque}`, {
+      codec: atual.codec,
       via: atual.via,
       fps: atual.fps,
       lag: atual.lag,
@@ -164,7 +172,10 @@ function expirar(agora = Date.now()) {
  */
 export function relatorio({ sala = null } = {}) {
   expirar();
-  const peso = { travado: 0, 'sem-imagem': 1, 'sem-decodificador': 2, atrasado: 3, ok: 4 };
+  // `sem-decodificador` vem na frente de tudo: quem travou já viu alguma coisa,
+  // quem não montou o decodificador não vê nada e não vai ver — e o conserto
+  // dele é outro (é o codec escolhido lá na origem, não a rede daqui).
+  const peso = { 'sem-decodificador': 0, travado: 1, 'sem-imagem': 2, atrasado: 3, ok: 4 };
   const lista = [...relatos.values()]
     .filter((r) => !sala || r.sala === sala)
     .sort((a, b) => (peso[a.estado] ?? 9) - (peso[b.estado] ?? 9) || b.em - a.em);

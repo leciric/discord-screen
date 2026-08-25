@@ -119,6 +119,10 @@ export function createPlayer(canvas, { onError, onTamanho } = {}) {
   // contador que zera não serve para o vigia perguntar "andou desde a última
   // vez que olhei?" — os dois leitores se roubariam.
   let desenhadosTotal = 0;
+  // O codec que este player tentou montar. Guardado mesmo — sobretudo — quando
+  // o `configure` falha: "sem decodificador" sem dizer de quê manda quem
+  // investiga adivinhar, e foi exatamente o que aconteceu na primeira vez.
+  let codecTentado = null;
 
   // Quadros decodificados esperando a hora de aparecer, em ordem de exibição.
   const fila = [];
@@ -150,6 +154,7 @@ export function createPlayer(canvas, { onError, onTamanho } = {}) {
     }
 
     const config = deserialize(rawConfig);
+    codecTentado = config.codec ?? null;
 
     decoder = new VideoDecoder({
       output: draw,
@@ -373,6 +378,9 @@ export function createPlayer(canvas, { onError, onTamanho } = {}) {
     ressincronizacoes = 0;
     largadosNoDecode = 0;
     desenhadosTotal = 0;
+    // `codecTentado` NÃO é zerado aqui de propósito: `start()` chama `stop()`
+    // antes de tentar, e zerar apagaria justamente o nome do codec que acabou
+    // de ser recusado — que é a única informação útil nesse momento.
     if (canvas.width && canvas.height) {
       ctx.fillStyle = '#000';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -417,6 +425,7 @@ export function createPlayer(canvas, { onError, onTamanho } = {}) {
    */
   function getSaude() {
     return {
+      codec: codecTentado,
       desenhados: desenhadosTotal,
       fila: fila.length,
       decode: decoder?.decodeQueueSize ?? 0,

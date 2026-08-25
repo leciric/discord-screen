@@ -361,8 +361,74 @@ function corpoDaSala(room) {
     ),
   );
   corpo.append(acoes);
+  corpo.append(senhaDaSala(room));
 
   return corpo;
+}
+
+/**
+ * A senha da sala, que só pode ser trocada — nunca lida.
+ *
+ * Vale dizer por que não existe um "mostrar senha" aqui, porque é a primeira
+ * coisa que se procura: ela é guardada como scrypt sobre um sal aleatório, e o
+ * valor em claro não fica em lugar nenhum depois de definido. Não é uma
+ * permissão que falta ao painel; é que não há o que mostrar, nem daqui nem de
+ * um terminal no servidor.
+ *
+ * Então a resposta para "esqueci a senha da sala" é esta caixa: põe uma que
+ * você conhece, ou tira a que existe. O aviso na tela diz isso, porque um campo
+ * de senha sem explicação faz qualquer um procurar o botão de revelar.
+ */
+function senhaDaSala(room) {
+  const bloco = el('div', 'acoes');
+
+  const campo = el('input');
+  campo.type = 'password';
+  campo.className = 'input-sm';
+  campo.placeholder = room.locked ? 'trocar por…' : 'definir uma senha…';
+  campo.autocomplete = 'new-password';
+  bloco.append(campo);
+
+  bloco.append(
+    botao('Definir', async () => {
+      if (!campo.value) {
+        toast('Escreva a senha nova antes.', 'ruim');
+        return;
+      }
+      const nova = campo.value;
+      // Sai da tela assim que vai para o servidor: um campo preenchido num
+      // painel que fica aberto o dia todo é um post-it colado no monitor.
+      campo.value = '';
+      await acao('senha', { room: room.id, senha: nova }, 'Senha definida');
+    }),
+  );
+
+  if (room.locked) {
+    bloco.append(
+      botao(
+        'Remover senha',
+        () =>
+          acao('senha', { room: room.id, senha: '' }, 'Senha removida', {
+            titulo: 'Remover a senha desta sala?',
+            texto:
+              'A sala fica aberta para qualquer pessoa do mesmo servidor. A senha antiga não volta — ela não é guardada em lugar nenhum, só o hash dela.',
+          }),
+        'btn-danger',
+      ),
+    );
+  }
+
+  bloco.append(
+    el(
+      'span',
+      'hint',
+      room.locked
+        ? 'A senha atual não pode ser lida — só substituída ou removida.'
+        : 'Sala aberta. A senha que você definir não poderá ser lida depois: anote.',
+    ),
+  );
+
+  return bloco;
 }
 
 function cartaoDaTela(room, stream) {
@@ -644,7 +710,12 @@ function renderClientes(data) {
     if (info.tom) estado.style.color = `var(--${info.tom === 'erro' ? 'danger' : 'warn'})`;
     linha.append(estado);
 
-    linha.append(el('td', null, c.via === 'rtc' ? 'direto' : 'relay'));
+    const via = el('td', null, c.via === 'rtc' ? 'direto' : 'relay');
+    // O codec vai embaixo do transporte: é a primeira coisa que se quer saber
+    // quando o estado é "sem decodificador", e a última que se quer caçar.
+    if (c.codec) via.append(el('span', 'second', c.codec));
+    via.className = 'cell';
+    linha.append(via);
     linha.append(el('td', 'num', c.fps === null ? '—' : String(c.fps)));
 
     const atraso = el('td', 'num', formatMs(c.lag));

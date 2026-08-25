@@ -1014,6 +1014,24 @@ app.post('/api/admin/acoes/:acao', requireAdmin, (req, res) => {
       return res.json({ ok: true, afetados: n });
     }
 
+    /**
+     * Tirar ou trocar a senha da sala.
+     *
+     * O que o painel NÃO faz, e não pode fazer: mostrar a senha. Ela é scrypt
+     * sobre sal aleatório, e o valor em claro não existe em lugar nenhum depois
+     * que foi definido. A ação honesta é substituir, não revelar.
+     *
+     * O valor nunca entra no log — só o que aconteceu com ele.
+     */
+    case 'senha': {
+      const nova = typeof req.body?.senha === 'string' ? req.body.senha : '';
+      const que = R.trocarSenhaPeloPainel(room, nova);
+      registrar(
+        que === 'definida' ? 'definiu uma senha nova para a sala' : 'removeu a senha da sala',
+      );
+      return res.json({ ok: true, senha: que });
+    }
+
     case 'fechar-sala': {
       const n = R.fecharSala(room);
       // Some com os boletins junto: a sala fechada de propósito não deve

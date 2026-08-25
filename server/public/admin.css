@@ -1012,6 +1012,25 @@ td:last-child {
   border-color: var(--brand);
 }
 
+/* O campo de senha da sala mora na linha de ações, ao lado dos botões, e não
+   numa coluna como os ajustes — daí a largura própria e o texto à esquerda. */
+.input-sm {
+  height: 30px;
+  width: 180px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+}
+
+.input-sm:focus {
+  outline: none;
+  border-color: var(--brand);
+}
+
 /* ---------------------------------------------------------------- avisos */
 
 .toasts {

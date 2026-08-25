@@ -1628,10 +1628,20 @@ describe('nivelVP9', () => {
 });
 
 describe('escolha de codec: hardware e ordem', () => {
-  it('prefere hardware em qualquer codec a software no codec preferido', async () => {
-    // O caso que custou caro: com o H.264 recusado, a escolha caia para VP8 e a
-    // tela inteira passava a codificar na CPU sem ninguem saber. Hardware por
-    // fora de tudo e o que garante que a CPU so entra quando nao ha alternativa.
+  it('nao troca H.264 por VP9 so para ganhar hardware', async () => {
+    // Este teste existe por causa de um estrago meu, em producao.
+    //
+    // Eu tinha posto `hardwareAcceleration` por fora do codec, achando que
+    // hardware em qualquer codec valia mais que software no preferido. Numa
+    // maquina com encoder de VP9 e sem o de H.264 — Linux com VAAPI, que e a
+    // configuracao comum — a transmissao virava VP9, e todo espectador que nao
+    // decodifica VP9 ficava sem imagem NENHUMA: `configure()` recusado, tela
+    // preta, "sem-decodificador" no painel.
+    //
+    // Codificar num codec nao diz nada sobre decodificar nesse codec, e este
+    // laco escolhe pelos dois lados sem perguntar nada a quem assiste. H.264 e
+    // o unico que todo mundo decodifica, entao ele so e abandonado quando nao
+    // ha H.264 nenhum — nem por software.
     VideoEncoderFalso.isConfigSupported.mockImplementation(async (config) => ({
       supported:
         config.hardwareAcceleration === 'prefer-hardware' ? config.codec.startsWith('vp09.') : true,
@@ -1639,7 +1649,18 @@ describe('escolha de codec: hardware e ordem', () => {
 
     const { encoder } = await noAr();
 
-    expect(encoder.configuracoes[0].codec).toMatch(/^vp09\./);
+    expect(encoder.configuracoes[0].codec).toBe(H264);
+    expect(encoder.configuracoes[0]).not.toHaveProperty('hardwareAcceleration');
+  });
+
+  it('mas prefere hardware dentro do codec, que e onde a escolha e livre', async () => {
+    // Aqui nao ha troca de codec em jogo: o H.264 serve dos dois jeitos, e
+    // entao a passada por hardware e a que vence.
+    VideoEncoderFalso.isConfigSupported.mockImplementation(async () => ({ supported: true }));
+
+    const { encoder } = await noAr();
+
+    expect(encoder.configuracoes[0].codec).toBe(H264);
     expect(encoder.configuracoes[0].hardwareAcceleration).toBe('prefer-hardware');
   });
 

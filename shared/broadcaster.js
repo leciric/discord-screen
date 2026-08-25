@@ -801,25 +801,32 @@ export function createBroadcaster({
     // troca de cena ele estoura o alvo com folga, e a rajada é justamente o que
     // entope o relay. Constante troca qualidade em cena difícil por um teto que
     // se cumpre.
-    // E o hardware por fora de tudo, que é a lição que custou mais caro aqui.
+    // O hardware é perguntado DENTRO do codec, e não por fora dele.
     //
-    // O bug do nível 3.0 não apagava a imagem: ele fazia a configuração ser
-    // recusada, o laço cair para o VP8 e a tela inteira passar a codificar na
-    // CPU. Funcionava — mal, pela metade da taxa, e ninguém tinha como saber,
-    // porque nada nesta função registrava em que pé ela tinha parado.
+    // Já esteve por fora, e por um dia inteiro. O raciocínio parecia bom:
+    // hardware em qualquer codec pouparia mais CPU que software no codec
+    // preferido. Ele ignora que este laço não escolhe só como codificar —
+    // escolhe o que TODO ESPECTADOR vai ter de decodificar, e ninguém aqui
+    // pergunta nada a eles.
     //
-    // Perguntar `prefer-hardware` primeiro conserta os dois lados. Garante a
-    // preferência de verdade: hardware em qualquer codec vale mais que software
-    // no codec preferido, porque é a CPU que decide se a captura acompanha.
-    // E, sobretudo, dá uma RESPOSTA: se a primeira passada não achar nada, sabe-se
-    // que esta máquina vai codificar em software, e isso vira aviso e vira
-    // linha no painel em vez de mistério.
+    // Com o hardware por fora, uma máquina com encoder de VP9 mas sem o de
+    // H.264 — que é a configuração comum de Linux com VAAPI — passava a
+    // transmitir VP9. Quem não decodifica VP9 recebia `configure()` recusado e
+    // ficava sem imagem nenhuma: não uma imagem pior, imagem nenhuma. Suportar
+    // um codec para codificar não diz nada sobre suportá-lo para decodificar, e
+    // H.264 é o único que todo mundo decodifica.
     //
-    // Conferido que a pergunta discrimina: no Chromium sem GPU,
-    // `prefer-hardware` é recusado para avc1, vp9, vp8 e av1, enquanto
-    // `no-preference` aceita os quatro. A resposta não é decorativa.
-    for (const hardware of [true, false]) {
-      for (const candidate of candidatos(width, height, fps)) {
+    // Então vale a regra que já estava escrita aqui e que eu tinha atropelado:
+    // degrada-se a opção antes de degradar o codec. `hardwareAcceleration` é
+    // uma opção como as outras duas, e entra na fila delas.
+    //
+    // A resposta continua vindo, que era a outra metade do motivo: se nenhuma
+    // passada com `prefer-hardware` passar, `porHardware` fica falso e isso vira
+    // aviso na aba de captura e linha no log. Conferido que a pergunta
+    // discrimina: no Chromium sem GPU, `prefer-hardware` é recusado para avc1,
+    // vp9, vp8 e av1, enquanto `no-preference` aceita os quatro.
+    for (const candidate of candidatos(width, height, fps)) {
+      for (const hardware of [true, false]) {
         for (const realtime of [true, false]) {
           for (const constante of [true, false]) {
             const cfg = { ...candidate, width, height, bitrate, framerate: fps };

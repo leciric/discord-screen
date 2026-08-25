@@ -1070,3 +1070,84 @@ describe('WebRTC', () => {
     expect(viewer.__rtc.has(entry.slot)).toBe(false);
   });
 });
+
+/**
+ * A senha pelo painel.
+ *
+ * O que se prova aqui, antes de qualquer comportamento, e que o valor em claro
+ * nao existe: `hashPassword` guarda scrypt sobre sal aleatorio, e nenhuma das
+ * saidas desta modulo devolve mais que `locked`. E por isso que a acao do
+ * painel e "substituir", e nunca "mostrar".
+ */
+describe('trocarSenhaPeloPainel', () => {
+  function salaComSenha(senha = 'segredo') {
+    const { room } = R.createRoom({
+      instance: instancia(),
+      name: 'Cofre',
+      ownerId: 'u1',
+      ownerName: 'Dona',
+      password: senha,
+    });
+    return room;
+  }
+
+  it('a senha em claro nao fica guardada em lugar nenhum', () => {
+    const room = salaComSenha('abracadabra');
+
+    // Nem no objeto da sala, por mais fundo que se procure.
+    expect(JSON.stringify(room.password)).not.toContain('abracadabra');
+    expect(JSON.stringify(R.stats())).not.toContain('abracadabra');
+    expect(JSON.stringify(R.adminStats())).not.toContain('abracadabra');
+  });
+
+  it('as saidas publicas dizem apenas que existe senha', () => {
+    const room = salaComSenha();
+    const naLista = R.listRooms(room.instance).find((r) => r.id === room.id);
+
+    expect(naLista.locked).toBe(true);
+    expect(naLista).not.toHaveProperty('password');
+  });
+
+  it('remove a senha e diz que removeu', () => {
+    const room = salaComSenha();
+
+    expect(R.trocarSenhaPeloPainel(room, '')).toBe('removida');
+    expect(R.checkPassword(room, 'qualquer-coisa').ok).toBe(true);
+  });
+
+  it('define uma nova e a antiga deixa de valer', () => {
+    const room = salaComSenha('velha');
+
+    expect(R.trocarSenhaPeloPainel(room, 'nova')).toBe('definida');
+    expect(R.checkPassword(room, 'velha').ok).toBe(false);
+    expect(R.checkPassword(room, 'nova').ok).toBe(true);
+  });
+
+  it('nao pede dono, que e o ponto: quem esqueceu a senha costuma nao estar', () => {
+    // `setPassword` recusa sem o dono, e a sala da call nem dono tem.
+    const room = salaComSenha();
+
+    expect(R.setPassword(room, 'outra-pessoa', '')).toMatch(/Só quem criou/);
+    expect(R.trocarSenhaPeloPainel(room, '')).toBe('removida');
+  });
+
+  it('funciona na sala da call, que tem ownerId nulo', () => {
+    const room = R.ensureCallRoom(instancia(), `call-${Math.random()}`, {});
+
+    expect(room.ownerId).toBe(null);
+    expect(R.trocarSenhaPeloPainel(room, 'agora-tem')).toBe('definida');
+    expect(R.checkPassword(room, 'agora-tem').ok).toBe(true);
+  });
+
+  it('solta quem estava de castigo pela senha antiga', () => {
+    const room = salaComSenha();
+    // Erra ate o bloqueio entrar.
+    for (let i = 0; i < 5; i++) R.checkPassword(room, 'errada');
+    expect(R.checkPassword(room, 'segredo').reason).toBe('bloqueado');
+
+    R.trocarSenhaPeloPainel(room, '');
+
+    // Continuar de castigo por uma senha que nao existe mais seria absurdo.
+    expect(R.checkPassword(room, '').ok).toBe(true);
+  });
+});

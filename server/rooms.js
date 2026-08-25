@@ -407,6 +407,37 @@ export function setPassword(room, userId, password) {
   return null;
 }
 
+/**
+ * A senha pelo painel, sem passar pelo dono.
+ *
+ * Existe porque a senha NÃO É RECUPERÁVEL: ela é guardada como scrypt sobre um
+ * sal aleatório (ver `hashPassword`), e o valor em claro não fica em lugar
+ * nenhum — nem em memória, nem em log, nem numa resposta de API. Nada em
+ * `stats`, `roomState` ou na lista pública devolve mais que `locked`.
+ *
+ * Isso é o desenho certo, e a consequência é que "esqueci a senha da sala" não
+ * tem resposta do tipo "consulte aqui". Tem esta: quem opera o servidor tira a
+ * senha, ou põe uma que ele mesmo escolheu e portanto conhece. Não é um jeito
+ * de ler o segredo, é o jeito de substituí-lo.
+ *
+ * Sem o dono de propósito. `setPassword` exige `room.ownerId`, e é justamente
+ * quem esqueceu a senha que costuma não estar por perto — e a sala da call nem
+ * dono tem (`ownerId: null`), o que tornaria a função inalcançável ali. O painel
+ * já fecha sala e derruba gente; tirar uma senha é menos que as duas.
+ *
+ * @returns {'removida'|'definida'} o que aconteceu, para o log dizer a verdade
+ *   sem nunca dizer o valor.
+ */
+export function trocarSenhaPeloPainel(room, senha) {
+  room.password = senha ? hashPassword(String(senha)) : null;
+  // As tentativas vão junto: quem estava de castigo pela senha antiga não pode
+  // continuar de castigo por uma senha que não existe mais.
+  room.attempts = [];
+  room.lockedUntil = 0;
+  broadcastState(room);
+  return senha ? 'definida' : 'removida';
+}
+
 // ------------------------------------------------------------------ registro
 
 /**
