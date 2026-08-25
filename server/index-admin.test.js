@@ -367,6 +367,70 @@ describe('/api/admin/metrics', () => {
   });
 });
 
+describe('/api/admin/logs', () => {
+  it('exige sessão de admin, como o resto do painel', async () => {
+    expect((await get('/api/admin/logs')).status).toBe(401);
+  });
+
+  it('entrega o que o servidor registrou, com o id da última linha', async () => {
+    const corpo = await (await get('/api/admin/logs', { headers: comoAdmin() })).json();
+
+    expect(Array.isArray(corpo.eventos)).toBe(true);
+    expect(corpo).toHaveProperty('ultimoId');
+    // `desde` existe para a aba aberta não rebaixar as mesmas linhas a cada
+    // dois segundos: pedir a partir da última já vista devolve nada.
+    const seguinte = await (
+      await get(`/api/admin/logs?desde=${corpo.ultimoId}`, { headers: comoAdmin() })
+    ).json();
+    expect(seguinte.eventos).toEqual([]);
+  });
+});
+
+describe('/api/admin/tuning', () => {
+  it('exige sessão de admin', async () => {
+    expect((await post('/api/admin/tuning', { atrasoRelayMs: 700 })).status).toBe(401);
+  });
+
+  it('aplica o que cabe no limite e recusa o resto em silêncio', async () => {
+    const corpo = await (
+      await post(
+        '/api/admin/tuning',
+        // O segundo está abaixo do mínimo: aceitá-lo viraria um laço de
+        // keyframe, que é o remédio entupindo o cano que ele deveria limpar.
+        { atrasoRelayMs: 700, keyframeIntervaloMs: 5 },
+        { headers: { 'Content-Type': 'application/json', ...comoAdmin() } },
+      )
+    ).json();
+
+    expect(Object.keys(corpo.aplicadas)).toEqual(['atrasoRelayMs']);
+    expect(corpo.ajustes.atrasoRelayMs).toBe(700);
+    expect(corpo.ajustes.keyframeIntervaloMs).toBe(1000);
+
+    // Devolve ao padrão para não contaminar os testes seguintes.
+    await post(
+      '/api/admin/tuning',
+      { atrasoRelayMs: 500 },
+      { headers: { 'Content-Type': 'application/json', ...comoAdmin() } },
+    );
+  });
+});
+
+describe('/api/admin/acoes', () => {
+  it('exige sessão de admin', async () => {
+    expect((await post('/api/admin/acoes/keyframe', { room: 'x' })).status).toBe(401);
+  });
+
+  it('recusa sala que não existe, em vez de fingir que fez', async () => {
+    const resposta = await post(
+      '/api/admin/acoes/keyframe',
+      { room: 'nao-existe' },
+      { headers: { 'Content-Type': 'application/json', ...comoAdmin() } },
+    );
+
+    expect(resposta.status).toBe(404);
+  });
+});
+
 describe('/api/config', () => {
   it('entrega o Client ID, que é público, e nunca o secret', async () => {
     const corpo = await (await get('/api/config')).json();

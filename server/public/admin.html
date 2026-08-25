@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="robots" content="noindex,nofollow" />
     <title>Admin · Sala de Tela</title>
-    <link rel="stylesheet" href="/admin.css" />
+    <link rel="stylesheet" href="/admin.css?v=2" />
   </head>
   <body>
     <main id="loading" class="center">
@@ -19,12 +19,8 @@
       <div class="center-inner">
         <div class="mark" aria-hidden="true">ST</div>
         <h1>Painel da Sala de Tela</h1>
-        <p id="loginMessage" class="muted">
-          Entre com a conta do Discord autorizada.
-        </p>
-        <a id="loginButton" class="btn btn-brand" href="/admin/auth/login">
-          Entrar com Discord
-        </a>
+        <p id="loginMessage" class="muted">Entre com a conta do Discord autorizada.</p>
+        <a id="loginButton" class="btn btn-brand" href="/admin/auth/login">Entrar com Discord</a>
       </div>
     </main>
 
@@ -40,122 +36,290 @@
 
         <div class="spacer"></div>
 
+        <!-- Um sinal só, no lugar mais visível: quando alguma coisa está
+             errada agora, ela aparece aqui em vez de esperar a pessoa achar a
+             aba certa. Some quando não há nada a dizer. -->
+        <button id="alertPill" class="pill-alert" hidden></button>
+
         <span class="who">
           <img id="adminAvatar" alt="" hidden />
           <span id="adminName"></span>
         </span>
-        <button id="refresh" class="btn btn-icon" title="Atualizar agora" aria-label="Atualizar agora">↻</button>
+        <!-- SVG, e não o caractere ↻: ele depende de a fonte da máquina ter o
+             glifo, e onde não tem sai um quadrado ou outra letra. -->
+        <button
+          id="refresh"
+          class="btn btn-icon"
+          title="Atualizar agora"
+          aria-label="Atualizar agora"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+            width="15"
+            height="15"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.9"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M20.5 12a8.5 8.5 0 1 1-2.6-6.1" />
+            <path d="M20.5 4.5V10H15" />
+          </svg>
+        </button>
         <button id="logout" class="btn">Sair</button>
       </header>
 
-      <div class="shell">
-        <div id="errorBanner" class="banner" hidden></div>
+      <div class="layout">
+        <nav class="nav" aria-label="Seções">
+          <button class="nav-item ativo" data-aba="visao">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="3" y="3" width="7" height="9" rx="1.5" />
+              <rect x="14" y="3" width="7" height="5" rx="1.5" />
+              <rect x="14" y="12" width="7" height="9" rx="1.5" />
+              <rect x="3" y="16" width="7" height="5" rx="1.5" />
+            </svg>
+            <span>Visão geral</span>
+          </button>
+          <button class="nav-item" data-aba="salas">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="2.5" y="4" width="19" height="13" rx="2" />
+              <path d="M8 21h8" />
+            </svg>
+            <span>Salas</span><em id="navSalas">0</em>
+          </button>
+          <button class="nav-item" data-aba="pessoas">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M17 20v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+              <circle cx="9" cy="7" r="4" />
+              <path d="M23 20v-2a4 4 0 0 0-3-3.87" />
+            </svg>
+            <span>Pessoas</span><em id="navPessoas">0</em>
+          </button>
+          <button class="nav-item" data-aba="diagnostico">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M3 12h4l2.5-7 5 14L17 12h4" />
+            </svg>
+            <span>Diagnóstico</span>
+          </button>
+          <button class="nav-item" data-aba="ajustes">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 7h10M18 7h2M4 17h2M10 17h10" />
+              <circle cx="16" cy="7" r="2.4" />
+              <circle cx="8" cy="17" r="2.4" />
+            </svg>
+            <span>Ajustes</span>
+          </button>
+        </nav>
 
-        <section class="stats" aria-label="Resumo">
-          <article class="card stat">
-            <p class="label">Pessoas online</p>
-            <p id="statPeople" class="value">—</p>
-            <p id="statPeopleSub" class="sub">&nbsp;</p>
-          </article>
+        <div class="shell">
+          <div id="errorBanner" class="banner" hidden></div>
 
-          <article class="card stat">
-            <p class="label">Transmitindo</p>
-            <p id="statStreams" class="value">—</p>
-            <p id="statStreamsSub" class="sub">&nbsp;</p>
-          </article>
+          <!-- ------------------------------------------------ visão geral -->
+          <section id="aba-visao" class="aba">
+            <div class="stats">
+              <article class="card stat">
+                <p class="label">Pessoas online</p>
+                <p id="statPeople" class="value">—</p>
+                <p id="statPeopleSub" class="sub">&nbsp;</p>
+              </article>
 
-          <article class="card stat">
-            <p class="label">Banda agora</p>
-            <p id="statBandwidth" class="value">—</p>
-            <p id="statBandwidthSub" class="sub">&nbsp;</p>
-            <!-- Só aparece quando há descarte. Zero é o normal, e número que
-                 fica zero o tempo todo ensina a pessoa a não olhar para ele. -->
-            <p id="statDropped" class="sub warn" hidden></p>
-          </article>
+              <article class="card stat">
+                <p class="label">Transmitindo</p>
+                <p id="statStreams" class="value">—</p>
+                <p id="statStreamsSub" class="sub">&nbsp;</p>
+              </article>
 
-          <article class="card stat">
-            <p class="label">Ping médio</p>
-            <p id="statPing" class="value">—</p>
-            <p id="statPingSub" class="sub">&nbsp;</p>
-          </article>
-        </section>
+              <article class="card stat">
+                <p class="label">Banda agora</p>
+                <p id="statBandwidth" class="value">—</p>
+                <p id="statBandwidthSub" class="sub">&nbsp;</p>
+                <!-- Só aparece quando há descarte. Zero é o normal, e número
+                     que fica zero o tempo todo ensina a não olhar para ele. -->
+                <p id="statDropped" class="sub warn" hidden></p>
+              </article>
 
-        <section class="card panel" aria-labelledby="trafficTitle">
-          <div class="panel-head">
-            <h2 id="trafficTitle">Tráfego</h2>
-            <div class="spacer"></div>
-            <div class="legend">
-              <span class="in"><i></i> Recebido</span>
-              <span class="out"><i></i> Enviado</span>
+              <article class="card stat">
+                <p class="label">Ping médio</p>
+                <p id="statPing" class="value">—</p>
+                <p id="statPingSub" class="sub">&nbsp;</p>
+              </article>
             </div>
-          </div>
-          <canvas id="chart" class="chart"></canvas>
-        </section>
 
-        <section class="card panel" aria-labelledby="peopleTitle">
-          <div class="panel-head">
-            <h2 id="peopleTitle">Quem está online</h2>
-            <div class="spacer"></div>
-            <span id="peopleCount" class="badge">0</span>
-          </div>
+            <section class="card panel">
+              <div class="panel-head">
+                <h2>Tráfego</h2>
+                <div class="spacer"></div>
+                <div class="legend">
+                  <span class="in"><i></i> Recebido</span>
+                  <span class="out"><i></i> Enviado</span>
+                  <span class="drop"><i></i> Descartado</span>
+                </div>
+              </div>
+              <canvas id="chart" class="chart"></canvas>
+            </section>
 
-          <p id="peopleEmpty" class="empty">Ninguém conectado agora.</p>
+            <div class="duo">
+              <section class="card panel">
+                <div class="panel-head"><h2>Recursos</h2></div>
+                <div class="meters">
+                  <div class="meter">
+                    <div class="meter-head">
+                      <span>CPU do processo</span><strong id="cpuProcess">—</strong>
+                    </div>
+                    <div class="bar"><i id="cpuProcessBar"></i></div>
+                  </div>
+                  <div class="meter">
+                    <div class="meter-head">
+                      <span>CPU da máquina</span><strong id="cpuHost">—</strong>
+                    </div>
+                    <div class="bar"><i id="cpuHostBar"></i></div>
+                  </div>
+                  <div class="meter">
+                    <div class="meter-head">
+                      <span>Memória da máquina</span><strong id="memHost">—</strong>
+                    </div>
+                    <div class="bar"><i id="memHostBar"></i></div>
+                  </div>
+                  <div class="meter">
+                    <div class="meter-head"><span>Disco</span><strong id="disk">—</strong></div>
+                    <div class="bar"><i id="diskBar"></i></div>
+                  </div>
+                </div>
+                <div class="minis">
+                  <div class="mini">
+                    <p class="label">Memória do processo</p>
+                    <p id="memProcess" class="mini-value">—</p>
+                  </div>
+                  <div class="mini">
+                    <p class="label">No ar há</p>
+                    <p id="uptime" class="mini-value">—</p>
+                  </div>
+                </div>
+              </section>
 
-          <div id="peopleScroll" class="table-scroll" hidden>
-            <table>
-              <thead>
-                <tr>
-                  <th>Pessoa</th>
-                  <th>Servidor</th>
-                  <th>Sala</th>
-                  <th>Estado</th>
-                  <th>Ping</th>
-                </tr>
-              </thead>
-              <tbody id="peopleRows"></tbody>
-            </table>
-          </div>
-        </section>
-
-        <div class="duo">
-          <section class="card panel" aria-labelledby="resourcesTitle">
-            <div class="panel-head"><h2 id="resourcesTitle">Recursos</h2></div>
-            <div class="minis">
-              <div class="mini">
-                <p class="label">CPU do processo</p>
-                <p id="cpuProcess" class="mini-value">—</p>
-              </div>
-              <div class="mini">
-                <p class="label">CPU da máquina</p>
-                <p id="cpuHost" class="mini-value">—</p>
-              </div>
-              <div class="mini">
-                <p class="label">Memória do processo</p>
-                <p id="memProcess" class="mini-value">—</p>
-              </div>
-              <div class="mini">
-                <p class="label">Memória da máquina</p>
-                <p id="memHost" class="mini-value">—</p>
-              </div>
-              <div class="mini">
-                <p class="label">Disco</p>
-                <p id="disk" class="mini-value">—</p>
-              </div>
-              <div class="mini">
-                <p class="label">No ar há</p>
-                <p id="uptime" class="mini-value">—</p>
-              </div>
+              <section class="card panel">
+                <div class="panel-head"><h2>Ambiente</h2></div>
+                <dl id="envList" class="dl"></dl>
+              </section>
             </div>
           </section>
 
-          <section class="card panel" aria-labelledby="envTitle">
-            <div class="panel-head"><h2 id="envTitle">Ambiente</h2></div>
-            <dl id="envList" class="dl"></dl>
+          <!-- ------------------------------------------------------ salas -->
+          <section id="aba-salas" class="aba" hidden>
+            <p id="salasEmpty" class="empty">Nenhuma sala aberta.</p>
+            <div id="salasLista" class="salas"></div>
+          </section>
+
+          <!-- ---------------------------------------------------- pessoas -->
+          <section id="aba-pessoas" class="aba" hidden>
+            <section class="card panel">
+              <div class="panel-head">
+                <h2>Quem está online</h2>
+                <div class="spacer"></div>
+                <span id="peopleCount" class="badge">0</span>
+              </div>
+
+              <p id="peopleEmpty" class="empty">Ninguém conectado agora.</p>
+
+              <div id="peopleScroll" class="table-scroll" hidden>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Pessoa</th>
+                      <th>Servidor</th>
+                      <th>Sala</th>
+                      <th>Estado</th>
+                      <th class="num">Ping</th>
+                      <th class="num">Fila</th>
+                      <th class="num">Recebido</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="peopleRows"></tbody>
+                </table>
+              </div>
+            </section>
+          </section>
+
+          <!-- ------------------------------------------------ diagnóstico -->
+          <section id="aba-diagnostico" class="aba" hidden>
+            <section class="card panel">
+              <div class="panel-head">
+                <h2>Sinais</h2>
+                <div class="spacer"></div>
+                <span class="hint">O que está fora do normal agora</span>
+              </div>
+              <div id="sinais" class="sinais"></div>
+            </section>
+
+            <section class="card panel">
+              <div class="panel-head">
+                <h2>Log do servidor</h2>
+                <div class="spacer"></div>
+                <select id="logNivel" class="select" aria-label="Filtrar por nível">
+                  <option value="">Todos os níveis</option>
+                  <option value="info">Info</option>
+                  <option value="aviso">Aviso</option>
+                  <option value="erro">Erro</option>
+                </select>
+                <select id="logEscopo" class="select" aria-label="Filtrar por origem">
+                  <option value="">Toda origem</option>
+                  <option value="sala">Sala</option>
+                  <option value="transmissao">Transmissão</option>
+                  <option value="painel">Painel</option>
+                  <option value="sistema">Sistema</option>
+                </select>
+                <button id="logPausa" class="btn btn-sm">Pausar</button>
+                <button id="logLimpa" class="btn btn-sm">Limpar</button>
+              </div>
+              <div id="logBox" class="log" role="log" aria-live="polite"></div>
+              <p id="logVazio" class="empty">Nada registrado ainda.</p>
+            </section>
+          </section>
+
+          <!-- ---------------------------------------------------- ajustes -->
+          <section id="aba-ajustes" class="aba" hidden>
+            <section class="card panel">
+              <div class="panel-head">
+                <h2>Números do relay</h2>
+                <div class="spacer"></div>
+                <span class="hint"
+                  >Valem na hora, e voltam ao padrão quando o servidor reinicia</span
+                >
+              </div>
+              <p class="note">
+                Quando uma sala começa a travar, o intervalo entre descobrir qual número está errado
+                e poder testar outro costuma custar um deploy inteiro — e o problema passa antes.
+                Daqui você muda e observa na aba de Salas no mesmo minuto.
+              </p>
+              <div id="ajustesForm" class="ajustes"></div>
+              <div class="acoes-fim">
+                <button id="ajustesPadrao" class="btn">Voltar ao padrão</button>
+                <button id="ajustesAplicar" class="btn btn-brand">Aplicar</button>
+              </div>
+            </section>
           </section>
         </div>
       </div>
     </div>
 
-    <script src="/admin.js"></script>
+    <div id="toasts" class="toasts" aria-live="polite"></div>
+
+    <!-- Confirmação das ações que mexem com quem está dentro. Um dialog só,
+         reaproveitado: cada ação escreve o texto e o que fazer no sim. -->
+    <div id="confirmModal" class="modal" hidden>
+      <div class="modal-box">
+        <h2 id="confirmTitulo">Tem certeza?</h2>
+        <p id="confirmTexto" class="muted"></p>
+        <div class="modal-acoes">
+          <button id="confirmNao" class="btn">Cancelar</button>
+          <button id="confirmSim" class="btn btn-danger">Confirmar</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="/admin.js?v=2"></script>
   </body>
 </html>

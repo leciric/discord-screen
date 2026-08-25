@@ -50,6 +50,19 @@ function sala() {
 }
 
 describe('quadro branco', () => {
+  it('existe também na sala da call, que é por onde passa o Discord', () => {
+    // Havia dois literais de sala, um por caminho de criação, e o quadro nasceu
+    // só num deles: no Discord o primeiro traço derrubava o handler.
+    const room = R.ensureCallRoom('inst', `call-${instancia()}`);
+    const ws = socket();
+    R.attachViewer(room, ws, { id: 'alguem', name: 'Alguém' });
+    ws.limpar();
+
+    R.pushQuadro(room, ws, traco(1));
+
+    expect(quadros(ws)).toHaveLength(1);
+  });
+
   it('existe sem transmissão nenhuma no ar', () => {
     const { room, wsDono, wsOutro } = sala();
 

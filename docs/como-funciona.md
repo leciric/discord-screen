@@ -324,6 +324,45 @@ todo mundo para isso. Agora quem afogou sai do fluxo até conseguir receber.
   rebuildar a cada troca de credencial, e esquecer disso não dava erro: a
   atividade abria e só quebrava no login.
 
+## O painel
+
+O painel responde quatro perguntas, uma por aba: está funcionando, quem está
+usando, o que está estranho, e o que dá para fazer sem subir um deploy.
+
+**Diagnóstico** é a aba que existe por causa de um problema concreto: o servidor
+sempre falou por `console.log`, e isso resolve para quem está com um terminal
+aberto no VPS. Quem abre o painel de outro lugar não tem esse terminal, e "por
+que a tela daquela pessoa travou às 21h04" não se responde com uma média na
+tela. Em vez de reescrever cada chamada de log, o `eventos.js` **deriva o
+console** para um anel de tamanho fixo — todo `[room abc] …` que já existia
+aparece no painel sem que ninguém tenha tocado onde ele é escrito, e o terminal
+continua recebendo tudo igual. O anel tem teto porque log sem teto é vazamento
+com data marcada, e o que ele descartou é dito, não escondido.
+
+Ao lado do log ficam os **sinais**: o que está fora do normal agora, com o que
+fazer a respeito. Os números todos já estão nas outras abas, e ninguém olha para
+trinta deles ao mesmo tempo procurando o que mudou.
+
+**Ajustes** deixa mexer nos números do relay com o servidor no ar. O valor disso
+é o intervalo: quando uma sala começa a travar, descobrir qual número está
+errado e poder testar outro custa um deploy inteiro, e o problema costuma passar
+antes. Só entra ali o que tem efeito imediato e reversível — teto de fila,
+intervalo de keyframe e as duas carências. Tetos de memória de anotação ficam de
+fora porque mexer neles com gente dentro deixa estado inconsistente, e isso não
+é ajuste, é bug guiado. `LIMITES` não é enfeite: é o que impede um zero digitado
+com pressa de virar um laço de keyframe.
+
+As **ações** da aba de Salas são cinco, e todas passam pelo mesmo teste: são
+reversíveis por natureza — a pior custa a alguém apertar "compartilhar" de novo
+— e todas respondem com o número do que fizeram. Um botão que responde "ok"
+tanto quando agiu quanto quando não achou nada é um botão que ensina a não
+confiar nele.
+
+O detalhe de cada transmissão traz o par que explica travamento: a **taxa** que
+ela está entregando e o **teto de fila** que decide o descarte, com a fila de
+cada espectador ao lado. Espectador marcado como _afogado_ é uma tela parada com
+o servidor sabendo por quê.
+
 ## Estrutura
 
 ```
@@ -331,7 +370,9 @@ server/
   index.js        HTTP + WebSocket, login do Discord, emissão de tokens
   rooms.js        salas e repasse dos quadros
   tokens.js       tokens assinados (sem biblioteca externa)
+  eventos.js      anel de log que alimenta o painel (deriva o console)
   public/share.*  a aba de captura, que roda FORA do Discord
+  public/admin.*  o painel: visão geral, salas, pessoas, diagnóstico, ajustes
 client/
   src/main.js     interface da sala e conexão
   src/player.js   decodifica os quadros e desenha no canvas

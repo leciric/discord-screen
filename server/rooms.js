@@ -33,51 +33,130 @@ export const FONTES = new Set(['tela', 'camera']);
 const MAX_ROOMS_PER_INSTANCE = 20;
 
 /**
- * Teto absoluto da fila de um espectador. Este é o freio de memória: sem ele,
- * um espectador que parou de vazar faz o processo inteiro crescer.
+ * Os números que se pode querer mexer com o servidor no ar.
+ *
+ * Estão num objeto, e não em `const`, por um motivo prático: quando uma sala
+ * começa a travar, o intervalo entre descobrir qual número está errado e poder
+ * testar outro é um deploy inteiro — e o problema costuma ter passado antes
+ * disso. Daqui o painel muda e observa na hora.
+ *
+ * Nem tudo é ajustável. Só entra aqui o que tem efeito imediato e reversível:
+ * teto de fila, intervalo de keyframe e as duas carências. Tetos de memória de
+ * anotação e grade de coordenadas ficam de fora porque mexer neles com gente
+ * dentro deixa estado inconsistente, e isso não é um ajuste, é um bug guiado.
+ *
+ * `LIMITES` não é enfeite: é o que impede um zero digitado com pressa de virar
+ * um laço de keyframe ou uma sala que fecha no mesmo instante em que abre.
  */
-const MAX_BUFFERED_BYTES = 2 * 1024 * 1024;
+export const ajustes = {
+  /**
+   * Quanto atraso a fila de um espectador pode acumular antes de descartarmos.
+   *
+   * Dois megabytes protegem a memória e não protegem o tempo: num stream de
+   * 2,5 Mb/s eles são seis segundos e meio de vídeo esperando na fila de uma
+   * pessoa. Como TCP entrega em ordem e não sabe largar quadro velho, essa
+   * pessoa vê a tela parada e depois pulando. Meio segundo cobre a rajada de
+   * uma troca de cena e é menos do que se percebe como atraso.
+   */
+  atrasoRelayMs: 500,
+
+  /**
+   * Teto absoluto da fila de um espectador. Este é o freio de memória, e é
+   * outro problema do de cima: sem ele, um espectador que parou de vazar faz o
+   * processo inteiro crescer.
+   */
+  bufferMaxBytes: 2 * 1024 * 1024,
+
+  // Piso do teto de latência: em bitrate baixo, meio segundo daria alguns
+  // quilobytes e um keyframe sozinho estouraria a conta a cada vez.
+  tetoMinBytes: 64 * 1024,
+
+  // Intervalo mínimo entre dois pedidos de keyframe para a mesma transmissão.
+  keyframeIntervaloMs: 1000,
+
+  // Sala vazia fecha, mas não no mesmo instante: recarregar a atividade
+  // desconecta e reconecta, e quem estivesse sozinho perderia a sala a cada F5.
+  salaVaziaMs: 12 * 1000,
+
+  // Quanto tempo a transmissão de alguém sobrevive à saída dessa pessoa da
+  // sala. Mesmo motivo da carência acima, e a variável de ambiente existe para
+  // o teste não ficar quinze segundos parado.
+  semPresencaMs: Number(process.env.BROADCAST_ORPHAN_MS) || 15 * 1000,
+};
+
+/** Faixa aceita de cada ajuste, e o que ele significa em uma linha. */
+export const LIMITES = {
+  atrasoRelayMs: {
+    min: 100,
+    max: 5000,
+    passo: 50,
+    unidade: 'ms',
+    rotulo: 'Atraso tolerado na fila',
+  },
+  bufferMaxBytes: {
+    min: 256 * 1024,
+    max: 16 * 1024 * 1024,
+    passo: 256 * 1024,
+    unidade: 'bytes',
+    rotulo: 'Teto de memória por espectador',
+  },
+  tetoMinBytes: {
+    min: 16 * 1024,
+    max: 1024 * 1024,
+    passo: 16 * 1024,
+    unidade: 'bytes',
+    rotulo: 'Piso do teto de fila',
+  },
+  keyframeIntervaloMs: {
+    min: 200,
+    max: 10_000,
+    passo: 100,
+    unidade: 'ms',
+    rotulo: 'Intervalo mínimo entre keyframes pedidos',
+  },
+  salaVaziaMs: {
+    min: 2000,
+    max: 600_000,
+    passo: 1000,
+    unidade: 'ms',
+    rotulo: 'Carência da sala vazia',
+  },
+  semPresencaMs: {
+    min: 2000,
+    max: 600_000,
+    passo: 1000,
+    unidade: 'ms',
+    rotulo: 'Carência da transmissão sem dono',
+  },
+};
 
 /**
- * Quanto atraso a fila de um espectador pode acumular antes de começarmos a
- * descartar. Este é o freio de latência, e é outro problema do de cima.
+ * Aplica o que veio do painel, ignorando o que não passa no limite.
  *
- * Dois megabytes protegem a memória e não protegem o tempo: num stream de
- * 2,5 Mb/s eles são seis segundos e meio de vídeo esperando na fila de uma
- * pessoa. Como TCP entrega em ordem e não sabe largar quadro velho, essa
- * pessoa vê a tela parada e depois pulando — e o quadro em que a tela mudou
- * de página está atrás de todos os outros. Era o teto que estava alto, não a
- * rede que estava ruim.
- *
- * Meio segundo cobre a rajada de uma troca de cena e é menos do que se percebe
- * como atraso. Passando disso, descartar é o que traz a imagem de volta ao
- * presente — e o keyframe pedido logo em seguida é o que a recompõe.
+ * Devolve o que mudou de verdade, para o painel poder dizer o que aconteceu em
+ * vez de um "ok" que também apareceria se nada tivesse sido aceito.
  */
-const ATRASO_RELAY_MS = 500;
+export function ajustar(mudancas) {
+  const aplicadas = {};
+  for (const [chave, cru] of Object.entries(mudancas ?? {})) {
+    const limite = LIMITES[chave];
+    if (!limite) continue;
 
-// Piso do teto acima: em bitrate baixo, meio segundo daria alguns quilobytes e
-// um keyframe sozinho estouraria a conta a cada vez.
-const TETO_RELAY_MIN = 64 * 1024;
+    const valor = Math.round(Number(cru));
+    if (!Number.isFinite(valor) || valor < limite.min || valor > limite.max) continue;
+    if (ajustes[chave] === valor) continue;
 
-// Intervalo mínimo entre dois pedidos de keyframe para a mesma transmissão.
-const KEYFRAME_ASK_EVERY_MS = 1000;
+    aplicadas[chave] = { de: ajustes[chave], para: valor };
+    ajustes[chave] = valor;
+  }
+  return aplicadas;
+}
+
 const MAX_NAME = 32;
 const MAX_ROOM_NAME = 40;
 
-// Sala vazia fecha, mas não no mesmo instante: recarregar a atividade
-// desconecta e reconecta, e quem estivesse sozinho perderia a sala a cada F5.
-// 12s cobre um reload com folga e some rápido o bastante para não deixar sala
-// fantasma na lista.
-const EMPTY_GRACE_MS = 12 * 1000;
-// Quanto tempo a transmissão de alguém sobrevive à saída dessa pessoa da sala.
-// Existe pelo mesmo motivo da carência acima: recarregar a atividade desconecta
-// e reconecta, e sem ela um F5 derrubaria a transmissão de quem não saiu de
-// lugar nenhum. Quinze segundos cobrem com folga o relogin do Discord, que o
-// próprio arranque já considera demorado a partir de oito.
-//
-// A variável de ambiente existe para o teste não ficar quinze segundos parado.
-// Em uso normal ninguém mexe nisto.
-const SEM_PRESENCA_MS = Number(process.env.BROADCAST_ORPHAN_MS) || 15 * 1000;
+// As duas carências deste bloco moram em `ajustes`, logo acima: elas são o
+// tipo de número que se quer mexer com o servidor no ar.
 const SWEEP_EVERY_MS = 4 * 1000;
 
 // Freio de força bruta: sem isso uma senha curta cai em segundos, porque o
@@ -97,7 +176,7 @@ const AUDIO = 3;
 // desenho é estado da transmissão, não um evento que passou. O laser não é
 // guardado — ele se refaz sozinho no quadro seguinte.
 //
-// Todos os tetos existem pelo mesmo motivo do MAX_BUFFERED_BYTES: um cliente
+// Todos os tetos existem pelo mesmo motivo do teto de fila: um cliente
 // adulterado desenhando em laço encheria a RAM do processo e o JSON de sincronia
 // de quem entrasse depois.
 const MAX_TRACOS = 400;
@@ -217,8 +296,8 @@ function medirTaxa(entry, bytes) {
 
 /** Quantos bytes podem esperar na fila de um espectador desta transmissão. */
 function tetoDe(entry) {
-  const porTempo = ((entry.taxaBytes ?? 0) * ATRASO_RELAY_MS) / 1000;
-  return Math.min(MAX_BUFFERED_BYTES, Math.max(TETO_RELAY_MIN, porTempo));
+  const porTempo = ((entry.taxaBytes ?? 0) * ajustes.atrasoRelayMs) / 1000;
+  return Math.min(ajustes.bufferMaxBytes, Math.max(ajustes.tetoMinBytes, porTempo));
 }
 
 // Uma pessoa pode ter duas transmissões ao mesmo tempo, então o uid sozinho não
@@ -330,6 +409,40 @@ export function setPassword(room, userId, password) {
 
 // ------------------------------------------------------------------ registro
 
+/**
+ * Os campos que toda sala tem, venha ela da lista ou de uma call.
+ *
+ * Existiam dois literais de sala, um em cada caminho de criação, e eles já
+ * tinham divergido: o quadro branco nasceu só num deles, e a sala da call — que
+ * é por onde passa todo mundo que usa isto no Discord — teria ficado sem
+ * quadro, quebrando no primeiro traço. Um lugar só, e o campo novo chega aos
+ * dois de graça.
+ */
+function novaSala(campos) {
+  return {
+    isCall: false,
+    guildId: null,
+    guildName: null,
+    channelId: null,
+    password: null,
+    attempts: [],
+    lockedUntil: 0,
+    createdAt: Date.now(),
+    emptySince: Date.now(),
+    broadcasters: new Map(),
+    slots: new Map(),
+    viewers: new Set(),
+    controles: new Set(),
+    droppedChunks: 0,
+    traffic: trafficCounter(),
+    // O quadro branco da sala. Vive fora das transmissões de propósito: ele
+    // existe quando não há tela nenhuma no ar, que é justamente quando as
+    // pessoas mais precisam de um lugar para desenhar junto.
+    quadro: novaAnn(),
+    ...campos,
+  };
+}
+
 export function createRoom({
   instance,
   name,
@@ -353,7 +466,7 @@ export function createRoom({
 
   const id = crypto.randomBytes(6).toString('base64url');
 
-  const room = {
+  const room = novaSala({
     id,
     instance,
     guildId,
@@ -363,21 +476,7 @@ export function createRoom({
     ownerId,
     ownerName,
     password: password ? hashPassword(String(password)) : null,
-    attempts: [],
-    lockedUntil: 0,
-    createdAt: Date.now(),
-    emptySince: Date.now(),
-    broadcasters: new Map(),
-    slots: new Map(),
-    viewers: new Set(),
-    controles: new Set(),
-    droppedChunks: 0,
-    traffic: trafficCounter(),
-    // O quadro branco da sala. Vive fora das transmissões de propósito: ele
-    // existe quando não há tela nenhuma no ar, que é justamente quando as
-    // pessoas mais precisam de um lugar para desenhar junto.
-    quadro: novaAnn(),
-  };
+  });
 
   rooms.set(id, room);
   return { room };
@@ -403,7 +502,7 @@ export function ensureCallRoom(instance, id, metadata = {}) {
     return room;
   }
 
-  room = {
+  room = novaSala({
     id,
     instance,
     guildId: metadata.guildId ?? null,
@@ -413,18 +512,7 @@ export function ensureCallRoom(instance, id, metadata = {}) {
     isCall: true,
     ownerId: null,
     ownerName: 'a call',
-    password: null,
-    attempts: [],
-    lockedUntil: 0,
-    createdAt: Date.now(),
-    emptySince: Date.now(),
-    broadcasters: new Map(),
-    slots: new Map(),
-    viewers: new Set(),
-    controles: new Set(),
-    droppedChunks: 0,
-    traffic: trafficCounter(),
-  };
+  });
 
   rooms.set(id, room);
   return room;
@@ -484,7 +572,7 @@ function derrubarAbandonadas(room, now) {
   // Cópia da lista: encerrar tira o transmissor do registro, e não se altera o
   // que se está percorrendo.
   for (const entry of [...room.broadcasters.values()]) {
-    if (entry.semDonoDesde === null || now - entry.semDonoDesde <= SEM_PRESENCA_MS) continue;
+    if (entry.semDonoDesde === null || now - entry.semDonoDesde <= ajustes.semPresencaMs) continue;
 
     sendJson(entry.ws, {
       type: 'stop-request',
@@ -541,7 +629,7 @@ const sweeper = setInterval(() => {
       room.emptySince = now;
       continue;
     }
-    if (now - room.emptySince > EMPTY_GRACE_MS) {
+    if (now - room.emptySince > ajustes.salaVaziaMs) {
       // As abas de captura não seguram a sala de pé, mas continuam ligadas a
       // ela — e essa é a única conexão que sobrevive a este ponto, justamente
       // porque ficou de fora da conta de vazio. Sem fechar aqui, ela segue
@@ -670,7 +758,7 @@ function requestKeyframe(entry, { urgente = false } = {}) {
   // decodificador frio, e esperar o intervalo custaria segundos de tela parada.
   // O recado é barato — do outro lado ele só levanta uma bandeira, e levantá-la
   // duas vezes é o mesmo que levantá-la uma.
-  if (!urgente && agora - (entry.lastKeyframeAsk ?? 0) < KEYFRAME_ASK_EVERY_MS) return;
+  if (!urgente && agora - (entry.lastKeyframeAsk ?? 0) < ajustes.keyframeIntervaloMs) return;
   entry.lastKeyframeAsk = agora;
   sendJson(entry.ws, { type: 'need-keyframe' });
 }
@@ -1502,6 +1590,104 @@ function usersOf(room) {
 }
 
 /** Estado detalhado usado exclusivamente pela API administrativa protegida. */
+// ------------------------------------------------------------ ações do painel
+//
+// Cinco coisas que, quando algo trava às nove da noite, resolvem sem deploy.
+// Todas são reversíveis por natureza — a pior delas custa a alguém apertar
+// "compartilhar" de novo — e todas dizem em número o que fizeram, porque um
+// botão que responde "ok" tanto quando agiu quanto quando não achou nada é um
+// botão que ensina a não confiar nele.
+
+/**
+ * Pede um ponto de partida novo a uma transmissão, ou a todas de uma sala.
+ *
+ * É o conserto mais barato que existe aqui: espectador com decodificador frio
+ * fica de tela parada até o keyframe periódico, que é de segundos, e este
+ * atalho traz a imagem de volta em um quadro. `urgente` de propósito — quem
+ * aperta isto está olhando para uma tela travada, não economizando banda.
+ */
+export function pedirKeyframe(room, slot = null) {
+  const alvos = [...room.slots.values()].filter(
+    (e) => e.streaming && (slot === null || e.slot === slot),
+  );
+  for (const entry of alvos) {
+    // Despreparar junto: sem isso, quem estava afogado continuaria fora do
+    // fluxo e o keyframe pedido passaria por ele sem ser aproveitado.
+    for (const v of room.viewers) v.__afogado?.delete(entry.slot);
+    requestKeyframe(entry, { urgente: true });
+  }
+  return alvos.length;
+}
+
+/** Pede a uma transmissão que encerre. Quem encerra é ela; aqui só se pede. */
+export function pararTransmissao(room, slot, motivo) {
+  const entry = room.slots.get(slot);
+  if (!entry) return false;
+  sendJson(entry.ws, {
+    type: 'stop-request',
+    motivo: motivo || 'A transmissão foi encerrada pelo painel.',
+  });
+  return true;
+}
+
+/** Apaga o desenho feito sobre uma transmissão. */
+export function limparAnotacoes(room, slot) {
+  const entry = room.slots.get(slot);
+  if (!entry) return 0;
+  const tinha = entry.ann.tracos.size;
+  entry.ann = novaAnn();
+  toViewers(room, { type: 'ann-sync', slot, tracos: [] });
+  sendJson(entry.ws, { type: 'ann-sync', slot, tracos: [] });
+  return tinha;
+}
+
+/**
+ * Derruba as conexões de uma pessoa numa sala.
+ *
+ * Não é banimento: ela reconecta no instante seguinte se quiser. Serve para o
+ * caso real de uma aba zumbi que continua contando como espectador e segurando
+ * o relay ligado para ninguém.
+ */
+export function derrubarPessoa(room, userId) {
+  let n = 0;
+  for (const ws of [...room.viewers]) {
+    if (ws.__info?.id !== userId) continue;
+    sendJson(ws, { type: 'error', message: 'Sua conexão foi encerrada pelo painel.' });
+    ws.close();
+    n++;
+  }
+  for (const entry of broadcastersOf(room, userId)) {
+    sendJson(entry.ws, { type: 'stop-request', motivo: 'Encerrada pelo painel.' });
+    n++;
+  }
+  return n;
+}
+
+/**
+ * Fecha a sala agora, sem esperar a carência de vazio.
+ *
+ * Avisa todo mundo antes de sumir do registro: quem estiver dentro recebe o
+ * mesmo `room-gone` da inatividade e sabe voltar para o lobby sozinho, em vez
+ * de ficar preso numa sala que o servidor já esqueceu.
+ */
+export function fecharSala(room) {
+  const gente = room.viewers.size + room.broadcasters.size + room.controles.size;
+
+  for (const entry of room.broadcasters.values()) {
+    sendJson(entry.ws, { type: 'stop-request', motivo: 'A sala foi fechada pelo painel.' });
+  }
+  for (const conjunto of [room.viewers, room.controles]) {
+    for (const ws of conjunto) {
+      sendJson(ws, { type: 'room-gone' });
+      ws.close();
+    }
+  }
+
+  rooms.delete(room.id);
+  console.log(`[room ${room.id}] fechada pelo painel`);
+  return gente;
+}
+
 export function adminStats() {
   const roomList = [...rooms.values()].map((room) => {
     const users = usersOf(room);
@@ -1511,6 +1697,7 @@ export function adminStats() {
         slot: entry.slot,
         userId: entry.info.id,
         userName: entry.info.name,
+        fonte: entry.fonte,
         startedAt: entry.startedAt,
         codec: entry.config?.codec ?? null,
         width: entry.config?.codedWidth ?? null,
@@ -1521,6 +1708,26 @@ export function adminStats() {
         bufferedBytes: entry.ws?.bufferedAmount ?? 0,
         pingMs: Number.isFinite(entry.ws?.__rttMs) ? entry.ws.__rttMs : null,
         traffic: trafficSnapshot(entry.traffic),
+        // O diagnóstico do relay, que é onde travamento nasce. `teto` é o que
+        // decide o descarte, e vê-lo ao lado da fila de cada espectador é o que
+        // transforma "está travando" em "está travando por causa disto".
+        taxaBytes: Math.round(entry.taxaBytes ?? 0),
+        teto: Math.round(tetoDe(entry)),
+        chunksLigados: entry.chunksLigados !== false,
+        // Quem está de fato recebendo esta tela, e por onde. Um espectador
+        // afogado é uma tela parada com o servidor sabendo por quê.
+        espectadores: [...room.viewers]
+          .filter((v) => v.__watching?.has(entry.slot))
+          .map((v) => ({
+            id: v.__info?.id ?? null,
+            name: v.__info?.name ?? '—',
+            transporte: v.__rtc?.has(entry.slot) ? 'webrtc' : 'relay',
+            pronto: Boolean(v.__primed?.has(entry.slot)),
+            afogado: Boolean(v.__afogado?.has(entry.slot)),
+            bufferedBytes: v.bufferedAmount ?? 0,
+            pingMs: Number.isFinite(v.__rttMs) ? v.__rttMs : null,
+          })),
+        anotacoes: { tracos: entry.ann.tracos.size, pontos: entry.ann.pontos },
       }));
 
     return {
@@ -1538,10 +1745,21 @@ export function adminStats() {
       broadcasters: room.broadcasters.size,
       droppedChunks: room.droppedChunks,
       traffic: trafficSnapshot(room.traffic),
+      // Quantas abas de captura estão ligadas sem nada no ar. Aba esquecida
+      // aberta é a explicação de metade das transmissões que "somem sozinhas".
+      controles: room.controles.size,
+      quadro: quadroResumo(room),
+      emptySince: room.emptySince,
       users,
       streams,
     };
   });
 
-  return { rooms: roomList, traffic: trafficSnapshot(appTraffic), startedAt: appTraffic.startedAt };
+  return {
+    rooms: roomList,
+    traffic: trafficSnapshot(appTraffic),
+    startedAt: appTraffic.startedAt,
+    ajustes: { ...ajustes },
+    limites: LIMITES,
+  };
 }

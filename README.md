@@ -99,9 +99,26 @@ muda, e você não mexe no site do Discord de novo.
 
 ## Painel administrativo
 
-O painel mostra em tempo real pessoas e servidores conectados, salas,
-transmissões, banda usada pelo relay, ping, descartes, CPU, memória, disco e
-informações do processo/container.
+O painel tem cinco abas, e cada uma responde uma pergunta:
+
+- **Visão geral** — está funcionando? Pessoas, transmissões, banda, ping,
+  gráfico de tráfego, CPU/memória/disco e o ambiente do processo.
+- **Salas** — abra uma e veja cada transmissão por dentro: codec, resolução,
+  quanto ela está entregando por segundo, e a fila de cada pessoa que assiste
+  contra o teto que decide o descarte. É aqui que "está travando" vira "está
+  travando por causa disto".
+- **Pessoas** — quem está online, com ping, fila e quanto já recebeu.
+- **Diagnóstico** — o que está fora do normal agora, em português, com o que
+  fazer a respeito; e o log do servidor ao vivo, com filtro por nível e origem.
+  É o mesmo log do terminal do servidor, sem precisar de um terminal.
+- **Ajustes** — os números do relay, editáveis com o servidor no ar. Valem na
+  hora e voltam ao padrão quando o servidor reinicia.
+
+E cinco botões que consertam coisas sem deploy: pedir keyframe (traz de volta
+uma tela parada), limpar desenhos, limpar o quadro, parar uma transmissão,
+derrubar uma conexão zumbi e fechar uma sala. Todos dizem quantos afetaram —
+"ok" tanto quando agiu quanto quando não achou nada é resposta que ensina a não
+confiar no botão.
 
 Para ligar, rode `npm run configurar` e responda a pergunta **"Seu ID do
 Discord"**, no passo 1. Um traço (`-`) desliga o painel de novo.

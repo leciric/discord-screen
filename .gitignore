@@ -10,3 +10,6 @@ coverage/
 
 # O zip de deploy, montado a partir da propria pasta. Nao e fonte de nada.
 *.zip
+
+# Sobras do Playwright quando ele dirige um navegador aqui. Não é fonte.
+.playwright-mcp/

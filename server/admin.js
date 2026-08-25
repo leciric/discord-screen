@@ -157,6 +157,11 @@ export function buildAdminDashboard({ roomState, sockets, system, configuration 
       pingP95Ms: percentile(pings, 0.95),
     },
     traffic: roomState.traffic,
+    // Os números do relay e a faixa de cada um. Vêm junto das métricas de
+    // propósito: o painel mostra o efeito e o controle na mesma resposta, e
+    // sem isso a aba de ajustes nasceria vazia esperando um segundo pedido.
+    ajustes: roomState.ajustes,
+    limites: roomState.limites,
     system,
     guilds: guildList,
     rooms,

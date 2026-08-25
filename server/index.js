@@ -11,6 +11,7 @@ import { signToken, verifyToken } from './tokens.js';
 import * as R from './rooms.js';
 import { systemSnapshot, startSampling } from './system.js';
 import { buildAdminDashboard } from './admin.js';
+import * as EV from './eventos.js';
 import { PORTA_PADRAO, LOCAL_PADRAO } from '../shared/porta.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -127,6 +128,11 @@ app.use((req, _res, next) => {
 });
 
 app.use(express.json());
+
+// Deriva o console para o anel de eventos assim que o processo sobe: tudo que
+// já era logado passa a aparecer no painel, sem que nenhuma chamada de log
+// tenha sido reescrita. O terminal continua recebendo tudo igual.
+EV.derivarConsole();
 
 // Uma Activity roda dentro de um iframe em <id>.discordsays.com, que por sua
 // vez está dentro do discord.com. Declarar essa cadeia é o que autoriza o
@@ -879,6 +885,109 @@ app.post('/api/admin/logout', (_req, res) => {
   );
   res.setHeader('Cache-Control', 'no-store');
   res.json({ ok: true });
+});
+
+/**
+ * O log recente, para o painel.
+ *
+ * `desde` é o id da última linha que o painel já tem: sem ele, uma aba aberta
+ * rebaixaria as mesmas quinhentas linhas a cada dois segundos.
+ */
+app.get('/api/admin/logs', requireAdmin, (req, res) => {
+  res.json(
+    EV.listar({
+      desde: Number(req.query.desde) || 0,
+      nivel: ['info', 'aviso', 'erro'].includes(req.query.nivel) ? req.query.nivel : null,
+      escopo: typeof req.query.escopo === 'string' ? req.query.escopo : null,
+      limite: Math.min(400, Math.max(1, Number(req.query.limite) || 200)),
+    }),
+  );
+});
+
+/**
+ * Ajusta os números do relay com o servidor no ar.
+ *
+ * O valor de mexer nisto daqui é o intervalo: quando uma sala começa a travar,
+ * descobrir qual número está errado e poder testar outro costuma custar um
+ * deploy inteiro — e o problema passa antes. O `ajustar` recusa em silêncio o
+ * que não cabe no limite, e a resposta diz o que de fato mudou, para o painel
+ * não anunciar sucesso quando nada foi aceito.
+ */
+app.post('/api/admin/tuning', requireAdmin, (req, res) => {
+  const aplicadas = R.ajustar(req.body);
+  const nomes = Object.keys(aplicadas);
+  if (nomes.length) {
+    console.log(
+      `[painel] ${req.admin.name} ajustou ${nomes
+        .map((k) => `${k}: ${aplicadas[k].de} → ${aplicadas[k].para}`)
+        .join(', ')}`,
+    );
+  }
+  res.json({ aplicadas, ajustes: R.ajustes, limites: R.LIMITES });
+});
+
+/**
+ * As ações que consertam alguma coisa na hora.
+ *
+ * Todas são reversíveis por natureza — a pior custa a alguém apertar
+ * "compartilhar" de novo — e todas respondem com um número do que fizeram.
+ * "ok" tanto quando agiu quanto quando não achou nada é o tipo de resposta que
+ * ensina a não confiar no botão.
+ */
+app.post('/api/admin/acoes/:acao', requireAdmin, (req, res) => {
+  const { acao } = req.params;
+  const { room: roomId, slot, userId, motivo } = req.body ?? {};
+
+  const room = roomId ? R.getRoom(String(roomId)) : null;
+  if (!room) return res.status(404).json({ error: 'sala_nao_encontrada' });
+
+  const numeroDoSlot = Number.isInteger(slot) ? slot : null;
+  const quem = req.admin.name;
+  const registrar = (texto) => console.log(`[painel] ${quem}: ${texto} (sala ${room.id})`);
+
+  switch (acao) {
+    case 'keyframe': {
+      const n = R.pedirKeyframe(room, numeroDoSlot);
+      registrar(`pediu keyframe a ${n} transmissão(ões)`);
+      return res.json({ ok: true, afetados: n });
+    }
+
+    case 'parar-transmissao': {
+      if (numeroDoSlot === null) return res.status(400).json({ error: 'slot_obrigatorio' });
+      const ok = R.pararTransmissao(room, numeroDoSlot, motivo);
+      registrar(`pediu parada do slot ${numeroDoSlot}`);
+      return res.json({ ok, afetados: ok ? 1 : 0 });
+    }
+
+    case 'limpar-quadro': {
+      const n = R.limparQuadro(room);
+      registrar(`limpou o quadro (${n} traços)`);
+      return res.json({ ok: true, afetados: n });
+    }
+
+    case 'limpar-anotacoes': {
+      if (numeroDoSlot === null) return res.status(400).json({ error: 'slot_obrigatorio' });
+      const n = R.limparAnotacoes(room, numeroDoSlot);
+      registrar(`limpou as anotações do slot ${numeroDoSlot} (${n} traços)`);
+      return res.json({ ok: true, afetados: n });
+    }
+
+    case 'derrubar': {
+      if (!userId) return res.status(400).json({ error: 'usuario_obrigatorio' });
+      const n = R.derrubarPessoa(room, String(userId));
+      registrar(`derrubou ${n} conexão(ões) de ${userId}`);
+      return res.json({ ok: true, afetados: n });
+    }
+
+    case 'fechar-sala': {
+      const n = R.fecharSala(room);
+      registrar(`fechou a sala (${n} conexões dentro)`);
+      return res.json({ ok: true, afetados: n });
+    }
+
+    default:
+      return res.status(400).json({ error: 'acao_desconhecida' });
+  }
 });
 
 app.get('/api/admin/metrics', requireAdmin, (_req, res) => {
