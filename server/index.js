@@ -1015,11 +1015,31 @@ app.post('/api/admin/acoes/:acao', requireAdmin, (req, res) => {
     }
 
     /**
-     * Tirar ou trocar a senha da sala.
+     * Sorteia um código para a sala, que o painel PODE mostrar.
      *
-     * O que o painel NÃO faz, e não pode fazer: mostrar a senha. Ela é scrypt
-     * sobre sal aleatório, e o valor em claro não existe em lugar nenhum depois
-     * que foi definido. A ação honesta é substituir, não revelar.
+     * A diferença entre este e o `senha` abaixo é quem escolheu o valor, e ela
+     * decide tudo: o que este servidor sorteia não é senha de ninguém e não se
+     * repete em lugar nenhum, então guardá-lo legível não devolve o risco de
+     * reuso que o hash existe para evitar. Ver `gerarCodigoPeloPainel`.
+     *
+     * O código volta na resposta para o painel mostrá-lo sem uma segunda
+     * viagem, e não entra no log: log é lido por mais gente e guardado por mais
+     * tempo que uma resposta de API.
+     */
+    case 'codigo': {
+      const codigo = R.gerarCodigoPeloPainel(room);
+      registrar('sorteou um código novo para a sala');
+      return res.json({ ok: true, codigo });
+    }
+
+    /**
+     * Tirar ou trocar a senha da sala, por uma escolhida a dedo.
+     *
+     * Esta o painel NÃO mostra depois, e não é limitação de permissão: senha
+     * escolhida por uma pessoa vira scrypt sobre sal aleatório e o valor em
+     * claro deixa de existir. Ela pode ser a senha de outra coisa na vida de
+     * quem a escolheu, e não é nossa para revelar. Quem quer um valor legível
+     * usa `codigo` acima.
      *
      * O valor nunca entra no log — só o que aconteceu com ele.
      */

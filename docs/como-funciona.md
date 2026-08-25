@@ -310,8 +310,17 @@ aleatório (`hashPassword`), e o valor em claro não fica em lugar nenhum depois
 de definido — nem em memória, nem em log, nem em resposta de API. `stats`,
 `adminStats`, `listRooms` e o `roomState` devolvem no máximo `locked: true`.
 
+Com uma exceção que o painel agora oferece: o **código sorteado**. Quando é
+este servidor que sorteia o valor, ele fica guardado legível ao lado do hash e
+o painel o mostra — porque hash de senha existe por causa de **reuso** (alguém
+escolhe aqui a mesma senha do e-mail), e um código sorteado não é de ninguém,
+não se repete em lugar nenhum e vale para uma sala que morre quando esvazia. É
+a natureza do código de uma reunião, que todo serviço de chamada mostra a quem
+organiza. Senha digitada a dedo continua só como hash e continua impossível de
+mostrar: ela pode ser a senha de outra coisa, e não é nossa para revelar.
+
 Então "esqueci a senha da sala" não tem resposta do tipo "consulte aqui". Tem
-esta: quem opera o servidor **substitui**. O painel, em cada sala, tem um campo
+duas: sortear um código (que o painel mostra), ou **substituir**. O painel, em cada sala, tem um campo
 de senha com "Definir" e "Remover" — `trocarSenhaPeloPainel`, que não passa pelo
 dono de propósito, porque quem esqueceu a senha costuma não estar por perto e a
 sala da call nem dono tem (`ownerId: null`). Remover também zera o castigo de

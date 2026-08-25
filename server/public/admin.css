@@ -1103,3 +1103,21 @@ td:last-child {
   gap: 8px;
   margin-top: 4px;
 }
+
+/* O código sorteado é para ser lido em voz alta e copiado: monoespaçado, com
+   espaço entre as letras, e clicável inteiro. */
+.codigo-sala {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 15px;
+  letter-spacing: 2px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.codigo-sala:hover {
+  border-color: var(--brand);
+}

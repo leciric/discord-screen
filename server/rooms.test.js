@@ -1151,3 +1151,92 @@ describe('trocarSenhaPeloPainel', () => {
     expect(R.checkPassword(room, '').ok).toBe(true);
   });
 });
+
+/**
+ * O código sorteado, que o painel pode mostrar.
+ *
+ * A diferença entre este e a senha escolhida a dedo e quem escolheu o valor, e
+ * e ela que decide se pode ser mostrado. Hash existe por causa de REUSO: uma
+ * pessoa escolhe a mesma senha aqui e no e-mail dela. Um codigo sorteado por
+ * este servidor nao e de ninguem e nao se repete em lugar nenhum, entao guarda-lo
+ * legivel entrega a utilidade sem devolver o risco.
+ */
+describe('gerarCodigoPeloPainel', () => {
+  function sala() {
+    const { room } = R.createRoom({
+      instance: instancia(),
+      name: 'Sala',
+      ownerId: 'u1',
+      ownerName: 'Dona',
+    });
+    return room;
+  }
+
+  it('devolve o codigo e o deixa legivel, que e o ponto', () => {
+    const room = sala();
+    const codigo = R.gerarCodigoPeloPainel(room);
+
+    expect(codigo).toMatch(/^[A-Z2-9]{8}$/);
+    expect(room.codigoVisivel).toBe(codigo);
+  });
+
+  it('e o codigo devolvido abre a sala de verdade', () => {
+    const room = sala();
+    const codigo = R.gerarCodigoPeloPainel(room);
+
+    expect(R.checkPassword(room, codigo).ok).toBe(true);
+    expect(R.checkPassword(room, 'OUTRACOISA').ok).toBe(false);
+  });
+
+  it('sai no painel, junto de locked', () => {
+    const room = sala();
+    const codigo = R.gerarCodigoPeloPainel(room);
+    const noPainel = R.adminStats().rooms.find((r) => r.id === room.id);
+
+    expect(noPainel.locked).toBe(true);
+    expect(noPainel.codigoVisivel).toBe(codigo);
+  });
+
+  it('nao repete entre salas', () => {
+    const codigos = new Set();
+    for (let i = 0; i < 20; i++) codigos.add(R.gerarCodigoPeloPainel(sala()));
+
+    expect(codigos.size).toBe(20);
+  });
+
+  it('sem letra ambigua: O e 0 lidos em voz alta sao a mesma coisa', () => {
+    for (let i = 0; i < 40; i++) {
+      expect(R.gerarCodigoPeloPainel(sala())).not.toMatch(/[O0I1L]/);
+    }
+  });
+
+  it('senha escolhida a dedo NAO fica legivel — ela pode ser a senha de outra coisa', () => {
+    const room = sala();
+    R.gerarCodigoPeloPainel(room);
+
+    R.trocarSenhaPeloPainel(room, 'a-que-eu-uso-no-email');
+
+    expect(room.codigoVisivel).toBe(null);
+    expect(R.adminStats().rooms.find((r) => r.id === room.id).codigoVisivel).toBe(null);
+    expect(JSON.stringify(R.adminStats())).not.toContain('a-que-eu-uso-no-email');
+  });
+
+  it('remover a senha leva o codigo junto', () => {
+    const room = sala();
+    R.gerarCodigoPeloPainel(room);
+
+    R.trocarSenhaPeloPainel(room, '');
+
+    expect(room.codigoVisivel).toBe(null);
+    expect(R.checkPassword(room, '').ok).toBe(true);
+  });
+
+  it('sortear de novo invalida o anterior', () => {
+    const room = sala();
+    const velho = R.gerarCodigoPeloPainel(room);
+    const novo = R.gerarCodigoPeloPainel(room);
+
+    expect(R.checkPassword(room, velho).ok).toBe(false);
+    expect(R.checkPassword(room, novo).ok).toBe(true);
+  });
+});

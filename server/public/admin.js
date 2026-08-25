@@ -403,30 +403,53 @@ function senhaDaSala(room) {
     }),
   );
 
+  bloco.append(botao('Sortear código', () => acao('codigo', { room: room.id }, 'Código sorteado')));
+
   if (room.locked) {
     bloco.append(
       botao(
-        'Remover senha',
+        'Remover',
         () =>
           acao('senha', { room: room.id, senha: '' }, 'Senha removida', {
             titulo: 'Remover a senha desta sala?',
             texto:
-              'A sala fica aberta para qualquer pessoa do mesmo servidor. A senha antiga não volta — ela não é guardada em lugar nenhum, só o hash dela.',
+              'A sala fica aberta para qualquer pessoa do mesmo servidor. Se era uma senha escolhida a dedo, ela não volta — só o hash dela existe.',
           }),
         'btn-danger',
       ),
     );
   }
 
-  bloco.append(
-    el(
-      'span',
-      'hint',
-      room.locked
-        ? 'A senha atual não pode ser lida — só substituída ou removida.'
-        : 'Sala aberta. A senha que você definir não poderá ser lida depois: anote.',
-    ),
-  );
+  // O código sorteado aparece porque foi feito para aparecer; a senha escolhida
+  // a dedo não aparece porque não existe mais em claro. Os dois casos ficam
+  // ditos, senão o campo vazio parece defeito do painel.
+  if (room.codigoVisivel) {
+    const caixa = el('div', 'cell');
+    const valor = el('code', 'codigo-sala', room.codigoVisivel);
+    valor.title = 'Clique para copiar';
+    valor.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(room.codigoVisivel);
+        toast('Código copiado', 'bom');
+      } catch {
+        // Sem permissão de área de transferência o código continua na tela para
+        // ser lido — não há nada a consertar, e um erro aqui só assustaria.
+      }
+    });
+    caixa.append(valor);
+    caixa.append(el('span', 'second', 'sorteado aqui — pode ser lido e repassado'));
+    bloco.append(caixa);
+  } else {
+    bloco.append(
+      el(
+        'span',
+        'hint',
+        room.locked
+          ? 'Senha escolhida a dedo: não pode ser lida, só substituída ou removida. Sorteie um código se quiser um valor visível.'
+          : 'Sala aberta. Sorteie um código para trancá-la com um valor que o painel mostra.',
+      ),
+    );
+  }
 
   return bloco;
 }

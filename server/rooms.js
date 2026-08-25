@@ -430,12 +430,59 @@ export function setPassword(room, userId, password) {
  */
 export function trocarSenhaPeloPainel(room, senha) {
   room.password = senha ? hashPassword(String(senha)) : null;
+  // Senha escolhida por uma pessoa sai do campo legível. Ver `gerarSenhaPeloPainel`:
+  // só o que este servidor sorteou pode ser mostrado depois.
+  room.codigoVisivel = null;
   // As tentativas vão junto: quem estava de castigo pela senha antiga não pode
   // continuar de castigo por uma senha que não existe mais.
   room.attempts = [];
   room.lockedUntil = 0;
   broadcastState(room);
   return senha ? 'definida' : 'removida';
+}
+
+/**
+ * Alfabeto do código sorteado: sem O/0 e sem I/l/1.
+ *
+ * Este código vai ser lido em voz alta ou copiado de um painel para um chat, e
+ * é aí que zero e ó viram a mesma coisa. Tirar os ambíguos custa um bit e meio
+ * de entropia e evita a queixa de "não funciona" que era um O no lugar de um 0.
+ */
+const ALFABETO_CODIGO = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+
+/**
+ * Sorteia um código de sala, e o guarda legível ao lado do hash.
+ *
+ * Aqui o valor fica recuperável de propósito, e isso não contradiz o
+ * `hashPassword` acima — vale explicar, porque parece contradizer.
+ *
+ * Hash de senha existe por causa de REUSO: alguém escolhe a mesma senha aqui e
+ * no e-mail, e um vazamento daqui vira problema lá. Por isso senha ESCOLHIDA
+ * por gente continua só como hash, e continua impossível de mostrar no painel —
+ * ela pode ser a senha de outra coisa, e não é minha para revelar.
+ *
+ * Um código SORTEADO por este servidor não tem esse problema: não é de ninguém,
+ * não se repete em lugar nenhum, e vale para uma sala que morre quando esvazia.
+ * É a natureza do código de uma reunião, que todo serviço de chamada mostra a
+ * quem organiza — mostrar é a função dele. Guardar em claro o que foi sorteado
+ * entrega a utilidade pedida sem devolver o risco que o hash evita.
+ *
+ * @returns {string} o código, para quem chamou poder mostrá-lo
+ */
+export function gerarCodigoPeloPainel(room, tamanho = 8) {
+  const bytes = crypto.randomBytes(tamanho);
+  let codigo = '';
+  // O `%` enviesa o alfabeto de leve: 256 não é múltiplo de 31. Com um código
+  // de sala que vale minutos o desvio é irrelevante, e rejeitar-e-resortear
+  // custaria mais explicação do que vale.
+  for (const b of bytes) codigo += ALFABETO_CODIGO[b % ALFABETO_CODIGO.length];
+
+  room.password = hashPassword(codigo);
+  room.codigoVisivel = codigo;
+  room.attempts = [];
+  room.lockedUntil = 0;
+  broadcastState(room);
+  return codigo;
 }
 
 // ------------------------------------------------------------------ registro
@@ -456,6 +503,9 @@ function novaSala(campos) {
     guildName: null,
     channelId: null,
     password: null,
+    // O código em claro, guardado SÓ quando foi este servidor que o sorteou.
+    // Ver `gerarCodigoPeloPainel`: senha escolhida por gente nunca mora aqui.
+    codigoVisivel: null,
     attempts: [],
     lockedUntil: 0,
     createdAt: Date.now(),
@@ -1770,6 +1820,9 @@ export function adminStats() {
       channelId: room.channelId ?? null,
       isCall: Boolean(room.isCall),
       locked: Boolean(room.password),
+      // Preenchido só para o que foi sorteado aqui. Senha escolhida por uma
+      // pessoa vem null, e o painel diz por quê em vez de mostrar campo vazio.
+      codigoVisivel: room.codigoVisivel ?? null,
       createdAt: room.createdAt,
       connections: room.viewers.size + room.broadcasters.size,
       viewers: room.viewers.size,
