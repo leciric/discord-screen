@@ -446,6 +446,52 @@ describe('/api/admin/acoes', () => {
 
     expect(resposta.status).toBe(404);
   });
+
+  /**
+   * O link de assistir, que é a resposta para "estão reclamando de uma tela e
+   * eu não estou no canal de voz".
+   *
+   * A sala da call não tem convite — o `/convite/:sala` é recusado para ela —,
+   * então quem administra a máquina era justamente quem não conseguia olhar a
+   * imagem de que estavam reclamando.
+   */
+  describe('ingresso', () => {
+    it('devolve um link que entra na sala, carimbado com quem pediu', async () => {
+      const dono = await (await post('/api/session-dev', { instance_id: 'i', name: 'Leo' })).json();
+      const sala = await (
+        await post('/api/rooms/create', { identity: dono.identity, name: 'Sala' })
+      ).json();
+
+      const corpo = await (
+        await post(
+          '/api/admin/acoes/ingresso',
+          { room: sala.roomId },
+          { headers: { 'Content-Type': 'application/json', ...comoAdmin() } },
+        )
+      ).json();
+
+      const url = new URL(corpo.url);
+      expect(url.origin).toBe('https://exemplo.test');
+      expect(url.pathname).toBe('/');
+
+      // O ingresso é o mesmo token de espectador que a atividade produz, e o
+      // `/api/rooms/open` o aceita — é isso que faz o link funcionar.
+      const aberta = await (
+        await post('/api/rooms/open', { token: url.searchParams.get('t') })
+      ).json();
+      expect(aberta.roomId).toBe(sala.roomId);
+
+      // Carimbado com quem pediu: repassar o link faria a outra pessoa aparecer
+      // na sala com o nome de quem está no painel, e isso precisa ser sabido.
+      const [carga] = url.searchParams.get('t').split('.');
+      const payload = JSON.parse(Buffer.from(carga, 'base64url').toString());
+      expect(payload).toMatchObject({ room: sala.roomId, name: 'Admin', role: 'viewer' });
+    });
+
+    it('exige sessão de admin como todas as outras', async () => {
+      expect((await post('/api/admin/acoes/ingresso', { room: 'x' })).status).toBe(401);
+    });
+  });
 });
 
 describe('/api/config', () => {
@@ -573,6 +619,102 @@ describe('página de estado', () => {
     const resposta = await post('/api/servidor/logout');
 
     expect(resposta.headers.get('set-cookie')).toContain('Max-Age=0');
+  });
+
+  /**
+   * Entrar, pelo navegador, numa sala que nasceu no Discord.
+   *
+   * A página lista essas salas e nunca publica o id delas — ele é derivado do
+   * canal de voz e não é nosso para publicar. O que ela publica é a chave
+   * opaca, e é dela que sai o ingresso: a porta desta rota é a porta desta
+   * página, e nada além dela.
+   */
+  describe('/api/publico/entrar', () => {
+    /** Uma sala nascida "no Discord", que é a que não tem id publicado. */
+    async function salaDoDiscord({ nome = 'Sala do canal', password = null } = {}) {
+      const dono = await (
+        await post('/api/session-dev', { instance_id: 'canal-9', name: 'Leo' })
+      ).json();
+      const sala = await (
+        await post('/api/rooms/create', { identity: dono.identity, name: nome, password })
+      ).json();
+
+      // O `/api/publico` guarda a resposta por um segundo — duas travessias
+      // das salas por segundo seria o custo de nada. Uma sala criada agora
+      // aparece na volta seguinte, e é isso que este laço espera.
+      let publica = null;
+      for (let i = 0; i < 20 && !publica; i++) {
+        const estado = await (await get('/api/publico', { headers: comoVisitante() })).json();
+        publica = estado.salas.find((s) => s.nome === nome) ?? null;
+        if (!publica) await new Promise((pronto) => setTimeout(pronto, 100));
+      }
+      return { ...sala, publica };
+    }
+
+    it('a sala do Discord aparece sem id e marcada como "abre por ingresso"', async () => {
+      const { publica } = await salaDoDiscord({ nome: 'Sem id' });
+
+      expect(publica.id).toBe(null);
+      expect(publica.entravel).toBe(false);
+      expect(publica.porIngresso).toBe(true);
+      expect(publica.chave).toMatch(/^[0-9a-f]{12}$/);
+    });
+
+    it('troca a chave por um link que entra na sala', async () => {
+      const { roomId, publica } = await salaDoDiscord({ nome: 'Com ingresso' });
+
+      const corpo = await (
+        await post(
+          '/api/publico/entrar',
+          { chave: publica.chave },
+          { headers: { 'Content-Type': 'application/json', ...comoVisitante() } },
+        )
+      ).json();
+
+      const url = new URL(corpo.url);
+      const aberta = await (
+        await post('/api/rooms/open', { token: url.searchParams.get('t') })
+      ).json();
+      expect(aberta.roomId).toBe(roomId);
+    });
+
+    it('sem passar pela porta desta página, não sai ingresso nenhum', async () => {
+      const { publica } = await salaDoDiscord({ nome: 'Sem sessao' });
+
+      const resposta = await post('/api/publico/entrar', { chave: publica.chave });
+
+      expect(resposta.status).toBe(401);
+      expect(await resposta.json()).toMatchObject({ error: 'login_required' });
+    });
+
+    it('a senha da sala continua valendo, que é a única escolhida pelo dono', async () => {
+      const { publica } = await salaDoDiscord({ nome: 'Trancada', password: 'abc123' });
+
+      const errada = await post(
+        '/api/publico/entrar',
+        { chave: publica.chave, senha: 'nope' },
+        { headers: { 'Content-Type': 'application/json', ...comoVisitante() } },
+      );
+      expect(errada.status).toBe(403);
+
+      const certa = await post(
+        '/api/publico/entrar',
+        { chave: publica.chave, senha: 'abc123' },
+        { headers: { 'Content-Type': 'application/json', ...comoVisitante() } },
+      );
+      expect(certa.status).toBe(200);
+    });
+
+    it('chave que não é de sala nenhuma não vira ingresso', async () => {
+      for (const chave of ['0'.repeat(12), '../../etc', '', null, 42]) {
+        const resposta = await post(
+          '/api/publico/entrar',
+          { chave },
+          { headers: { 'Content-Type': 'application/json', ...comoVisitante() } },
+        );
+        expect(resposta.status).toBe(404);
+      }
+    });
   });
 });
 

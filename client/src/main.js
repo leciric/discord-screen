@@ -2857,6 +2857,34 @@ function ensureVigia() {
         mudou = true;
       }
 
+      // Travou NA CONEXÃO DIRETA: volta para o relay sozinho.
+      //
+      // Este é o único travamento do programa que se conserta sem perguntar
+      // nada a ninguém, e por isso ele não devia estar esperando um clique.
+      //
+      // O raciocínio já estava escrito na entrega do WebRTC — "um peer
+      // 'connected' que não entrega nada é indistinguível de um travamento" —
+      // mas valia só para a TROCA de transporte: o `prazoRtc` protegia a
+      // conexão que nunca entregou o primeiro quadro, e depois disso ninguém
+      // mais olhava. A que entrega e para no meio ficava sem vigia, e é a pior
+      // das duas: o servidor já desligou o relay daquela tela (ver
+      // `atualizarChunks`), então não há nem o caminho lento chegando por
+      // baixo. Ninguém do lado de lá sabe que a imagem parou, e quem assiste
+      // olha uma tela congelada até desistir.
+      //
+      // Voltar ao relay é seguro por construção: ele é o piso, funciona em
+      // qualquer NAT, e o `desistirDoRtc` avisa o servidor para religar os
+      // bytes com um keyframe junto. E não entra em laço — a conexão direta só
+      // é convidada de novo num `watch` novo, que não acontece aqui.
+      if (travado && s.viaRtc) {
+        console.info('[rtc] a conexão direta parou de entregar; voltando ao relay', { slot });
+        marcaDeQuadros.delete(slot);
+        s.travado = false;
+        desistirDoRtc(slot);
+        mudou = true;
+        continue;
+      }
+
       telas.push({ slot, via: s.viaRtc ? 'rtc' : 'relay', saude });
     }
 
@@ -3105,6 +3133,17 @@ async function authWeb() {
 
   let identity = fromLogin ?? read('identity');
 
+  // Guardada e já vencida é o mesmo que não ter: o crachá do Discord dura oito
+  // horas, então quem entrou de manhã e voltou à noite cai aqui. Isto já
+  // devolveu `null`, e `null` é a sessão que faz o lobby carregar bonito e o
+  // clique em qualquer sala não fazer nada — porque `enterRoom` desistia em
+  // silêncio. A pessoa via a lista, clicava e nada acontecia; só recarregar
+  // resolvia, e ninguém tem por que adivinhar isso.
+  if (identity && !decodeIdentity(identity)) {
+    remove('identity');
+    identity = null;
+  }
+
   // Sem identidade nenhuma: entra como convidado. O login do Discord é uma
   // melhoria opcional, não um pedágio para assistir uma tela.
   if (!identity) {
@@ -3242,8 +3281,9 @@ async function showLobby() {
 
   clearInterval(lobbyTimer);
   lobbyTimer = setInterval(() => {
-    // Nenhum modal aberto: recarregar sob o cursor tiraria o card do lugar no
-    // meio de um clique.
+    // Modal aberto: a lista atrás dele não está sendo olhada, e recarregá-la é
+    // trabalho para ninguém. O cursor parado sobre um cartão é tratado na
+    // pintura — ver `pintarSalas`.
     const busy = ['createModal', 'joinModal'].some((id) => !$(id).hidden);
     if (!busy && !$('lobby').hidden) loadRooms();
   }, LOBBY_REFRESH_MS);
@@ -3261,16 +3301,55 @@ async function loadRooms() {
   }
 
   lobbyRooms = rooms;
-
-  const cards = rooms.map(roomCard);
-
-  if (!cards.length) {
-    list.replaceChildren(msgRow('Nenhuma sala aberta. Crie a primeira.'));
-    return;
-  }
-
-  list.replaceChildren(...cards);
+  salasPendentes = rooms;
+  if (!mexendoNoLobby()) pintarSalas();
 }
+
+/**
+ * A lista de salas se refaz do zero — mas nunca debaixo da mão de ninguém.
+ *
+ * `replaceChildren` troca todos os cartões a cada volta do laço, inclusive o
+ * que a pessoa está mirando. Isso não é cosmético: um clique humano leva uns
+ * 100 ms entre apertar e soltar, e quando a troca cai nesse meio o `mousedown`
+ * e o `mouseup` acontecem em nós diferentes — o navegador dispara o `click` no
+ * ancestral comum, que não é o cartão. O clique simplesmente não acontece, sem
+ * erro nenhum, e o lobby ganha fama de não abrir sala.
+ *
+ * Havia meia guarda aqui, contra modal aberto, escrita com este motivo. Ela
+ * cobria a caixa por cima e deixava passar o caso comum, que é o cursor parado
+ * sobre o cartão esperando a hora de clicar.
+ *
+ * Os dados continuam chegando no ritmo de sempre; é a PINTURA que espera.
+ */
+let salasPendentes = null;
+
+function pintarSalas() {
+  if (!salasPendentes) return;
+  const rooms = salasPendentes;
+  salasPendentes = null;
+
+  const list = $('roomList');
+  const cards = rooms.map(roomCard);
+  list.replaceChildren(
+    ...(cards.length ? cards : [msgRow('Nenhuma sala aberta. Crie a primeira.')]),
+  );
+}
+
+function mexendoNoLobby() {
+  const list = $('roomList');
+  // `:hover` não existe em tela de toque, e lá não há ponteiro parado em cima
+  // esperando a próxima volta.
+  return list.matches(':hover') || list.contains(document.activeElement);
+}
+
+$('roomList').addEventListener('pointerleave', pintarSalas);
+// No próximo tick: durante o `focusout` o `activeElement` ainda é o de saída, e
+// perguntar agora responderia sempre que o foco continua dentro.
+$('roomList').addEventListener('focusout', () => {
+  setTimeout(() => {
+    if (!mexendoNoLobby()) pintarSalas();
+  }, 0);
+});
 
 function msgRow(text) {
   const el = document.createElement('div');
@@ -3319,7 +3398,14 @@ function roomCard(room) {
 }
 
 async function enterRoom(room, password) {
-  if (!session) return;
+  // Sem sessão não há como entrar, e ficar em silêncio é o pior dos dois
+  // mundos: o cartão responde ao clique, some o realce, e nada acontece. Quem
+  // chega aqui já passou por `authWeb`, que só devolve `null` quando nem o
+  // convidado nasceu — quase sempre a rede tendo caído no arranque.
+  if (!session) {
+    toast('Sua sessão não abriu. Recarregue a página para entrar.', true);
+    return;
+  }
 
   try {
     const tokens = await post(`${P}/api/rooms/join`, {

@@ -529,10 +529,34 @@ que mora em `publico.js` e deixa de fora duas classes inteiras de coisa:
    teste dessa projeção é escrito ao contrário — ele procura os campos que não
    podem estar lá.
 2. **Identificador que sirva de porta.** O id de uma sala é a chave de entrada
-   dela, e só acompanha as salas em que essa entrada existe: as do site. A sala
-   de uma call aparece na lista, mas sem id, porque o dela é derivado do id do
-   canal de voz. Cada linha leva no lugar uma chave opaca, salgada por processo,
-   que serve para a página saber que o cartão é o mesmo depois do refresh.
+   dela, e não sai daqui para sala nascida no Discord: o dela é derivado do id
+   do canal de voz e não é nosso para publicar. Cada linha leva no lugar uma
+   chave opaca, salgada por processo, que serve para a página saber que o cartão
+   é o mesmo depois do refresh.
+
+Essas duas exclusões chegaram a valer por uma terceira, que não era da mesma
+família e vinha junto de carona: **se dava para entrar**. Sem id publicado, sem
+botão — e o resultado, num servidor cujas salas nascem todas na atividade, era
+uma página inteira de frases explicando que a porta era outra. A frase estava
+certa sobre o mecanismo e errada sobre quem a lia: quem vê "3 telas no ar" quer
+olhar, não ser informado.
+
+Hoje as duas perguntas são separadas. O id continua sem sair (`id: null`), e a
+sala ganha `porIngresso: true`; o botão manda a **chave** ao
+`POST /api/publico/entrar`, que percorre os ids abertos derivando a chave de
+cada um até achar o dono dela — uma volta por sala aberta, que é o preço de o id
+não circular. O que volta é um `?t=<ingresso>`, o mesmo token de espectador que
+o botão "Assistir no site" da atividade produz, e daí para a frente o caminho é
+o `/api/rooms/open` que já existia.
+
+Duas coisas ficam de fora dessa troca, e as duas de propósito. A **senha** da
+sala continua sendo cobrada: é a única coisa que o dono escolheu a dedo para
+manter alguém do lado de fora, e seria estranho um ingresso assinado aqui passar
+por cima dela. E a **porta é a desta página, e nada além dela** — quem passa
+pelo `/api/publico` para ver a sala listada passa pelo `entrar` para entrar
+nela. Com `PUBLIC_STATUS=aberto` isso quer dizer qualquer pessoa com o endereço:
+publicar a página passou a publicar a entrada junto, e quem hospeda precisa
+saber disso na hora de escolher o modo.
 
 A porta é o login do Discord, e a razão é o conteúdo: nome e foto de quem está
 online agora são da turma do servidor, não do endereço inteiro da internet. Com
@@ -553,6 +577,31 @@ volta, senão o parâmetro seria um redirect aberto com o nosso domínio na barr
 `PUBLIC_STATUS=off` desliga a página e a rota juntas; `aberto` dispensa o login,
 que é o modo de quem está testando na própria máquina. A rota tem um segundo de
 cache compartilhado, porque ela é a única sem porteiro que varre todas as salas.
+
+No painel administrativo o mesmo ingresso existe como a ação `ingresso`, e ele
+está lá pelo caso simétrico: a sala de uma call não tem convite, então quem
+administra a máquina era exatamente quem não conseguia olhar a tela de que
+estavam reclamando sem entrar no canal de voz. O link entra na sala **como quem
+pediu** — o nome vai carimbado dentro dele —, o que faz dele um link para olhar
+e não para distribuir.
+
+### A lista não se refaz debaixo da mão de ninguém
+
+As duas listas de sala do projeto — a desta página e a do lobby — se refaziam
+inteiras a cada volta do laço, com `replaceChildren`. Isso não é cosmético. Um
+clique humano leva uns 100 ms entre apertar e soltar, e quando a troca cai nesse
+meio o `mousedown` e o `mouseup` acontecem em nós diferentes: o navegador
+dispara o `click` no ancestral comum, que não é o botão. O clique não acontece,
+sem erro nenhum, e a página ganha fama de não abrir sala. Com o campo de senha
+na linha ficaria pior — o que estava sendo digitado sumia no meio.
+
+Havia meia guarda contra isso no lobby, escrita com esse motivo: ela cobria o
+modal aberto e deixava passar o caso comum, que é o cursor parado sobre o cartão
+esperando a hora de clicar. Agora os dados continuam chegando no ritmo de
+sempre e é a **pintura** que espera: enquanto o ponteiro está sobre a lista, ou
+o foco está dentro dela, a última resposta fica guardada e entra assim que a mão
+sai. Ninguém olha uma lista parada por engano — ou está mexendo nela, e aí é
+justamente isso que não pode se mover.
 
 ## Estrutura
 

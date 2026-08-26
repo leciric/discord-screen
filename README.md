@@ -187,9 +187,17 @@ Ela mostra as salas abertas, quem está dentro de cada uma, o que está no ar e
 por quanto tempo o servidor está de pé — e um botão **Entrar** que abre a sala
 no navegador, inteira: assistir, desenhar, apontar, mostrar a sua tela.
 
-As salas que nasceram dentro do Discord aparecem na lista, mas sem botão: quem
-manda nelas é a presença no canal de voz, e a página diz isso em vez de oferecer
-uma porta que não abre.
+As salas que nasceram dentro do Discord — a sala de uma call, ou uma sala criada
+pela atividade num canal de voz — **também têm botão**. Elas não têm id público
+(o id de uma sala da call é derivado do canal, e não é nosso para publicar), e
+por isso ficaram um tempo com uma frase no lugar do botão, explicando que a porta
+era outra. A frase estava certa sobre o mecanismo e errada sobre quem lia: quem
+vê "3 telas no ar" quer olhar.
+
+Hoje o botão pede um ingresso ao servidor a partir da chave opaca da sala, e a
+porta é a mesma por onde a pessoa entrou nesta página. O id continua sem sair
+daqui, e a senha da sala, quando existe, continua sendo pedida — ela é a única
+coisa que o dono escolheu a dedo para manter alguém do lado de fora.
 
 ### O link para colar no chat
 
@@ -202,7 +210,15 @@ Quem recebe e já entrou uma vez cai direto na sala. Quem nunca entrou passa pel
 login do Discord e **volta para aquela sala**, não para uma lista onde teria de
 procurá-la de novo. A senha da sala, se houver, continua sendo pedida.
 
-O mesmo botão existe no painel administrativo, dentro de cada sala.
+O mesmo botão existe no painel administrativo, dentro de cada sala. E ao lado
+dele, **Assistir no site**: ele abre aquela sala no navegador, numa aba nova,
+inclusive a sala de uma call — que é justamente a que não tem convite. Quem
+administra a máquina era quem não conseguia olhar a tela de que estavam
+reclamando sem entrar no canal de voz.
+
+Esse link entra na sala **como quem está no painel**: o nome vai carimbado
+dentro dele, e repassá-lo faria outra pessoa aparecer na sala com esse nome. É
+link para olhar, não para distribuir.
 
 ### Quem pode abrir
 
@@ -235,6 +251,12 @@ Duas saídas, na variável `PUBLIC_STATUS`:
 PUBLIC_STATUS=off      # desliga a página e a rota juntas
 PUBLIC_STATUS=aberto   # dispensa o login (para testar na sua máquina)
 ```
+
+> **`aberto` agora abre mais do que a lista.** Desde que o botão **Entrar**
+> passou a valer também para as salas nascidas no Discord, a porta da página é a
+> porta das salas: sem login, qualquer pessoa com o endereço entra em qualquer
+> sala listada, inclusive a de uma call. Use `aberto` na sua máquina; num
+> endereço que a internet alcança, deixe o login ligado.
 
 O login pede duas coisas ao Discord: quem você é, e de quais servidores você
 participa. Nada é publicado em seu nome, e a página não mostra endereço, conta

@@ -566,6 +566,17 @@ export function createRoom({
 export const getRoom = (id) => rooms.get(id) ?? null;
 
 /**
+ * Os ids de todas as salas abertas, de qualquer instância.
+ *
+ * Existe para quem só tem a chave opaca de uma sala e precisa achá-la — a
+ * página pública publica a chave e nunca o id (ver `publico.js`), então o
+ * caminho de volta é percorrer os ids e derivar a chave de cada um. São
+ * dezenas de salas, não milhares, e a alternativa seria guardar um segundo
+ * índice que precisaria ser mantido em sincronia por nada.
+ */
+export const roomIds = () => [...rooms.keys()];
+
+/**
  * A sala fixa de uma call: id derivado do canal, criada na primeira entrada.
  *
  * Não tem dono nem senha — quem controla o acesso é a própria call, já que só

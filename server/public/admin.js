@@ -724,6 +724,8 @@ function corpoDaSala(room) {
     );
   }
 
+  acoes.append(assistirNoSite(room));
+
   acoes.append(
     botao(
       'Fechar a sala',
@@ -740,6 +742,48 @@ function corpoDaSala(room) {
   corpo.append(senhaDaSala(room));
 
   return corpo;
+}
+
+/**
+ * Abrir esta sala no navegador, a partir do painel.
+ *
+ * Existe porque a sala de uma call não tem convite — o `/convite/:sala` é
+ * recusado para ela — e quem administra a máquina era justamente quem não
+ * conseguia olhar a tela de que estavam reclamando sem entrar no canal de voz
+ * do Discord. Ver a queixa e não ter como ver a imagem é o pior lugar para se
+ * estar num painel de diagnóstico.
+ *
+ * O link entra na sala como QUEM ESTÁ NO PAINEL: o nome vai carimbado no
+ * ingresso, e repassá-lo faria outra pessoa aparecer na sala com esse nome. É
+ * link para olhar, não para distribuir — para distribuir existe o "Copiar
+ * convite" ao lado, e para as salas do Discord existe a página pública.
+ *
+ * A aba é aberta ANTES do pedido, ainda dentro do gesto do clique: depois do
+ * `await` o navegador já não reconhece a abertura como consequência de um
+ * clique e a bloqueia como pop-up. Se ela não vier — bloqueador mais estrito —
+ * o link vai para a área de transferência, que é pior mas não é nada.
+ */
+function assistirNoSite(room) {
+  return botao('Assistir no site', async () => {
+    const aba = window.open('', '_blank');
+    if (aba) aba.opener = null;
+
+    try {
+      const r = await fetch('/api/admin/acoes/ingresso', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ room: room.id }),
+      });
+      const corpo = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(corpo.error ?? `servidor respondeu ${r.status}`);
+
+      if (aba) aba.location = corpo.url;
+      else await copiar(corpo.url, 'Sem aba nova: o link de assistir foi copiado');
+    } catch (erro) {
+      aba?.close();
+      toast(`Não deu: ${erro.message}`, 'ruim');
+    }
+  });
 }
 
 /**

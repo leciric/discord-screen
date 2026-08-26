@@ -11,7 +11,7 @@ import { signToken, verifyToken } from './tokens.js';
 import * as R from './rooms.js';
 import { systemSnapshot, startSampling } from './system.js';
 import { buildAdminDashboard } from './admin.js';
-import { montarEstadoPublico } from './publico.js';
+import { chaveDe, montarEstadoPublico } from './publico.js';
 import * as EV from './eventos.js';
 import * as DIAG from './diagnostico.js';
 import { PORTA_PADRAO, LOCAL_PADRAO } from '../shared/porta.js';
@@ -1179,6 +1179,24 @@ app.post('/api/admin/acoes/:acao', requireAdmin, (req, res) => {
       return res.json({ ok: true, senha: que });
     }
 
+    /**
+     * O endereço de assistir esta sala pelo navegador.
+     *
+     * Existe porque a sala de uma call não tem convite: o `/convite/:sala`
+     * acima é recusado para ela, e quem administra a máquina era justamente
+     * quem não conseguia olhar a tela de que estavam reclamando sem entrar no
+     * canal de voz.
+     *
+     * O link entra como QUEM PEDIU: o nome carimbado no ingresso é o de quem
+     * está no painel, e repassá-lo a outra pessoa a faria aparecer na sala com
+     * esse nome. É link para olhar, não para distribuir — para distribuir há o
+     * "Copiar convite", e para as salas do Discord há a página pública.
+     */
+    case 'ingresso': {
+      registrar('pediu o link de assistir pelo navegador');
+      return res.json({ ok: true, url: urlDeAssistir(room.id, req.admin) });
+    }
+
     case 'fechar-sala': {
       const n = R.fecharSala(room);
       // Some com os boletins junto: a sala fechada de propósito não deve
@@ -1392,6 +1410,93 @@ app.get('/api/publico', (req, res) => {
 
   res.json(cachePublico.corpo);
 });
+
+/**
+ * A sala de uma chave opaca, ou null.
+ *
+ * A página pública publica `chave` e nunca o id (ver `publico.js`), então o
+ * caminho de volta é derivar a chave de cada id aberto e comparar. É uma volta
+ * por sala aberta — dezenas, não milhares — e é o preço de o id não circular.
+ */
+function salaPelaChave(chave) {
+  if (typeof chave !== 'string' || !/^[0-9a-f]{12}$/.test(chave)) return null;
+  const id = R.roomIds().find((cada) => chaveDe(cada) === chave);
+  return id ? R.getRoom(id) : null;
+}
+
+/**
+ * O endereço de assistir de uma sala, com o ingresso de quem pediu.
+ *
+ * O mesmo `?t=` que o botão "Assistir no site" da atividade produz: o token de
+ * espectador vale como ingresso, o `/api/rooms/open` reemite os tokens a partir
+ * do que está assinado dentro dele, e ninguém troca de nome no caminho.
+ */
+function urlDeAssistir(roomId, me) {
+  const { viewerToken } = issueRoomTokens(roomId, me);
+  return `${PUBLIC_ORIGIN}/?t=${encodeURIComponent(viewerToken)}`;
+}
+
+/**
+ * Entrar, pelo navegador, numa sala que nasceu no Discord.
+ *
+ * Antes desta rota a página pública listava as salas da call e não abria
+ * nenhuma: o id delas não é publicado, e sem id não havia botão. A frase que
+ * ficava no lugar do botão estava certa sobre o mecanismo e errada sobre o que
+ * a pessoa queria — quem vê "3 telas no ar" quer olhar, não ser informado de
+ * que a porta é outra.
+ *
+ * **A porta desta rota é a porta desta página, e nada além dela.** Quem passa
+ * pelo `/api/publico` para ver a sala listada passa por aqui para entrar nela.
+ * Com `PUBLIC_STATUS=aberto` isso quer dizer qualquer pessoa com o endereço —
+ * publicar a página passou a publicar também a entrada, e quem hospeda precisa
+ * saber disso na hora de escolher o modo. Com o modo normal, a porta continua
+ * sendo login do Discord + participar do servidor autorizado.
+ *
+ * A senha da sala, quando existe, continua valendo. Ela é a única coisa que o
+ * dono da sala escolheu a dedo para manter gente de fora do lado de fora, e
+ * seria estranho que um ingresso assinado aqui passasse por cima dela.
+ */
+app.post('/api/publico/entrar', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  if (!MOSTRAR_STATUS) return res.status(404).json({ error: 'desligado' });
+
+  const quem = quemVeOStatus(req);
+  if (!STATUS_ABERTO && !quem) return res.status(401).json({ error: 'login_required' });
+
+  const room = salaPelaChave(req.body?.chave);
+  if (!room) return res.status(404).json({ error: 'Sala não existe mais.' });
+
+  const check = R.checkPassword(room, req.body?.senha);
+  if (!check.ok) {
+    return res.status(check.reason === 'bloqueado' ? 429 : 403).json({
+      error:
+        check.reason === 'bloqueado'
+          ? `Muitas tentativas. Tente de novo em ${check.seconds}s.`
+          : 'Senha incorreta.',
+      reason: check.reason,
+    });
+  }
+
+  // Sem login (`PUBLIC_STATUS=aberto`) não há nome para carimbar, e inventar um
+  // fixo faria duas pessoas entrarem como a mesma. Um convidado por ingresso é
+  // o mesmo que o site faz com quem chega sem conta.
+  const me = quem ?? {
+    uid: `guest-${crypto.randomBytes(8).toString('base64url')}`,
+    name: nomeDeVisita(req.body?.nome),
+  };
+
+  console.log(`[publico] ${me.name} entrou na sala ${room.id} pelo navegador`);
+  res.json({ url: urlDeAssistir(room.id, me) });
+});
+
+/** O nome que a visita escolheu, ou um sorteado. Mesmo limite do resto. */
+function nomeDeVisita(bruto) {
+  const limpo = String(bruto ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 32);
+  return limpo || `Convidado ${Math.floor(Math.random() * 9000 + 1000)}`;
+}
 
 // Activity buildada (produção). Em dev o Vite serve o client na 5173.
 const clientDist = path.join(__dirname, '..', 'client', 'dist');

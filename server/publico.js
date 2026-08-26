@@ -67,12 +67,20 @@ function pessoaPublica(user) {
 }
 
 /**
- * Por que esta sala não abre daqui.
+ * Por que esta sala não abre pelo `?sala=<id>`.
  *
- * A resposta honesta importa mais do que esconder a sala: quem vê "Sala da
- * call" com cinco pessoas dentro e um botão morto conclui que o site está
- * quebrado. Quem lê "esta é a sala de uma call — entre pelo Discord" entende
- * que a porta é outra, e é a porta certa.
+ * Duas coisas diferentes moram nesta resposta, e misturá-las já custou caro.
+ *
+ * A primeira é o **id**, que não sai daqui para sala nascida no Discord: ele é
+ * derivado do canal de voz, não é nosso para publicar, e quem o tem entra sem
+ * passar por porta nenhuma. Isso não mudou e não muda.
+ *
+ * A segunda é se dá para **entrar**, e essa passou a ter outra resposta. Antes
+ * as duas eram a mesma: sem id publicado, sem botão — e o resultado era um
+ * servidor inteiro de salas do Discord com uma frase no lugar de cada botão.
+ * Hoje quem passou pela porta desta página pede um ingresso ao servidor
+ * (`/api/publico/entrar`), que o assina a partir da chave opaca. O id continua
+ * sem sair, e o botão existe.
  */
 function motivoDeNaoEntrar(room, instanciaWeb) {
   if (room.isCall) return 'call';
@@ -88,6 +96,10 @@ function salaPublica(room, instanciaWeb) {
     chave: chaveDe(room.id),
     // Só a sala em que a entrada existe leva o id. Ver a nota no topo.
     id: motivo === null ? room.id : null,
+    // Esta abre pelo ingresso, e não pelo id: é a sala nascida no Discord, cujo
+    // id não é publicado. A porta é a mesma desta página — ver
+    // `motivoDeNaoEntrar` e a rota `/api/publico/entrar`.
+    porIngresso: motivo !== null,
     nome: room.name,
     dono: room.ownerName ?? null,
     servidor: room.guildName ?? null,

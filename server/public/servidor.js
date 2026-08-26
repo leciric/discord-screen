@@ -269,10 +269,54 @@ function desenhar(dados) {
   desenharPessoas(dados.pessoas);
 }
 
+/**
+ * A lista de salas, refeita do zero — mas nunca debaixo da mão de ninguém.
+ *
+ * O laço passa de 4 em 4 segundos e `replaceChildren` troca todos os cartões,
+ * inclusive o botão que a pessoa está mirando. Isso não é cosmético: um clique
+ * humano leva uns 100 ms entre apertar e soltar, e quando a troca cai nesse
+ * meio o `mousedown` e o `mouseup` acontecem em nós diferentes — o navegador
+ * então dispara o `click` no ancestral comum, que não é o botão. O clique
+ * simplesmente não acontece, sem erro nenhum, e a página ganha fama de não
+ * funcionar. Com o campo de senha na linha, seria pior: o que estava sendo
+ * digitado sumia no meio da digitação.
+ *
+ * Então os dados continuam chegando no ritmo de sempre e é a PINTURA que
+ * espera: enquanto o ponteiro está sobre a lista, ou o foco está dentro dela, a
+ * última resposta fica guardada e entra assim que a mão sai. Ninguém olha uma
+ * lista parada por engano — ou está mexendo nela, e aí é justamente isso que
+ * não pode se mover.
+ */
+let salasPendentes = null;
+
 function desenharSalas(salas) {
   $('salasVazio').hidden = salas.length > 0;
+  salasPendentes = salas;
+  if (!mexendoNasSalas()) pintarSalas();
+}
+
+function pintarSalas() {
+  if (!salasPendentes) return;
+  const salas = salasPendentes;
+  salasPendentes = null;
   $('salas').replaceChildren(...salas.map(cartaoDeSala));
 }
+
+function mexendoNasSalas() {
+  const lista = $('salas');
+  // `:hover` não existe em tela de toque, e lá o problema também não existe do
+  // mesmo jeito: não há ponteiro parado em cima esperando a próxima volta.
+  return lista.matches(':hover') || lista.contains(document.activeElement);
+}
+
+$('salas').addEventListener('pointerleave', pintarSalas);
+// No próximo tick: durante o `focusout` o `activeElement` ainda é o de saída, e
+// perguntar agora responderia sempre que o foco continua dentro.
+$('salas').addEventListener('focusout', () => {
+  setTimeout(() => {
+    if (!mexendoNasSalas()) pintarSalas();
+  }, 0);
+});
 
 function cartaoDeSala(sala) {
   const card = el('article', `sala${sala.telas.length ? ' ao-vivo' : ''}`);
@@ -370,12 +414,20 @@ function quemEsta(pessoas) {
 }
 
 /**
- * O botão de entrar — ou a explicação de por que ele não existe aqui.
+ * O botão de entrar. Toda sala tem um — o que muda é por onde ele passa.
  *
- * A sala de uma call do Discord não abre pelo site: quem manda nela é a
- * presença no canal de voz, e o servidor recusaria a entrada de qualquer jeito.
- * Um botão morto faria a página parecer quebrada; a frase faz a pessoa procurar
- * a porta certa.
+ * Sala do site abre pelo id, que esta página já recebe: um `<a href>` comum,
+ * que preserva o "abrir em outra aba" do botão do meio e passa pelo pedido de
+ * senha do próprio site.
+ *
+ * Sala nascida no Discord não tem id publicado (ver `publico.js`), e por isso
+ * ficava sem botão nenhum — uma frase explicando que a porta era outra. A frase
+ * estava certa sobre o mecanismo e errada sobre a pessoa: quem lê "3 telas no
+ * ar" quer olhar. Agora o servidor assina um ingresso a partir da chave opaca,
+ * e a porta é a mesma por onde ela entrou nesta página.
+ *
+ * A frase continua, virou legenda: saber que a sala vive numa call do Discord
+ * muda o que se espera encontrar lá dentro.
  */
 function entrada(sala) {
   const fim = el('div', 'sala-fim');
@@ -396,16 +448,103 @@ function entrada(sala) {
     return fim;
   }
 
-  fim.append(
-    el(
-      'span',
-      'porque',
-      sala.isCall
-        ? 'Sala de uma call: abre pela atividade do Discord, dentro do canal de voz.'
-        : 'Criada dentro do Discord: abre pela atividade, no canal de voz de onde ela nasceu.',
-    ),
-  );
+  if (sala.porIngresso) {
+    fim.append(
+      el(
+        'span',
+        'porque',
+        sala.isCall
+          ? 'Sala de uma call do Discord.'
+          : 'Criada dentro do Discord, no canal de voz de onde ela nasceu.',
+      ),
+    );
+    fim.append(sala.trancada ? formaDeSenha(sala) : botaoDeIngresso(sala, 'Entrar', () => null));
+    return fim;
+  }
+
+  fim.append(el('span', 'porque', 'Esta sala não abre pelo navegador.'));
   return fim;
+}
+
+/**
+ * O botão que troca a chave da sala por um endereço de assistir.
+ *
+ * A navegação acontece aqui, e não num `<a href>`, porque o endereço só existe
+ * depois da resposta: ele carrega um ingresso assinado, e assinar um por sala a
+ * cada volta do laço de 4 segundos seria emitir dezenas de credenciais por
+ * minuto para links que ninguém clicou.
+ */
+function botaoDeIngresso(sala, rotulo, senhaAgora, aoErrar) {
+  const botao = el('button', 'btn btn-brand', rotulo);
+
+  botao.addEventListener('click', async () => {
+    botao.disabled = true;
+    try {
+      const resposta = await fetch('/api/publico/entrar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chave: sala.chave, senha: senhaAgora() ?? '' }),
+      });
+      const corpo = await resposta.json().catch(() => ({}));
+
+      // A sessão desta página dura oito horas. Vencida no meio do uso, a porta
+      // volta — em vez de um erro que ninguém sabe resolver.
+      if (resposta.status === 401) {
+        location.href = `/servidor/auth/login?voltar=${encodeURIComponent('/servidor')}`;
+        return;
+      }
+      if (!resposta.ok) throw new Error(corpo.error ?? `o servidor respondeu ${resposta.status}`);
+
+      // `location.href`, e não `window.open`: o clique já gastou o gesto na ida
+      // ao servidor, e aba nova depois de await é bloqueada como pop-up.
+      location.href = corpo.url;
+    } catch (erro) {
+      if (aoErrar) aoErrar(erro.message);
+      else aviso(`Não deu para entrar: ${erro.message}`, 'ruim');
+      botao.disabled = false;
+    }
+  });
+
+  return botao;
+}
+
+/**
+ * A senha da sala, pedida na própria linha.
+ *
+ * Sem modal de propósito: é um campo e um botão, e a sala em questão já está
+ * na tela — tirar a pessoa daqui para uma caixa por cima seria perder o que ela
+ * estava olhando para responder uma pergunta de uma linha.
+ */
+function formaDeSenha(sala) {
+  const caixa = el('div', 'senha-linha');
+
+  const campo = el('input');
+  campo.type = 'password';
+  campo.className = 'input-sm';
+  campo.placeholder = 'senha da sala';
+  campo.autocomplete = 'off';
+  campo.setAttribute('aria-label', `Senha da sala ${sala.nome}`);
+
+  const erro = el('span', 'porque erro');
+  erro.hidden = true;
+
+  const botao = botaoDeIngresso(
+    sala,
+    'Entrar',
+    () => campo.value,
+    (mensagem) => {
+      erro.textContent = mensagem;
+      erro.hidden = false;
+      campo.select();
+    },
+  );
+
+  campo.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') botao.click();
+  });
+
+  caixa.append(campo, botao, erro);
+  return caixa;
 }
 
 function desenharPessoas(pessoas) {

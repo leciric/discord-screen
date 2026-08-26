@@ -564,6 +564,7 @@ a:hover {
 
 .sala-fim {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   margin-top: auto;
@@ -574,11 +575,50 @@ a:hover {
   flex: 1;
 }
 
+/* A legenda toma a linha inteira quando há botão embaixo dela: ela diz onde a
+   sala vive, e dividir a largura com o botão deixaria as duas coisas apertadas
+   e o botão do tamanho de meia palavra. */
 .porque {
-  flex: 1;
+  flex: 1 1 100%;
   color: var(--apagado);
   font-size: 12.5px;
   line-height: 1.35;
+}
+
+.porque.erro {
+  color: var(--vivo);
+}
+
+/* A senha pedida na própria linha da sala. Sem modal: é um campo e um botão, e
+   a sala em questão já está na tela. */
+.senha-linha {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.senha-linha .btn {
+  flex: 0 0 auto;
+}
+
+.input-sm {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--linha-forte);
+  border-radius: var(--raio-sm);
+  background: var(--fundo-2);
+  color: var(--fg);
+  font: inherit;
+  font-size: 14px;
+}
+
+.input-sm:focus {
+  border-color: var(--brand);
+  outline: none;
 }
 
 .pessoas {
