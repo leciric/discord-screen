@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Sala de Tela">
+  <!--
+    A mesma marca do cabeçalho das páginas: quadradinho arredondado com o
+    degradê do Discord (#5865f2 → #8b5cf6). A aba do navegador é o único lugar
+    onde o logo aparece com 16 pixels de lado, e "ST" escrito ali vira dois
+    borrões — então o que fica é a forma: uma tela, que é do que este programa
+    trata, com o ponto vermelho de "no ar" mordendo o canto.
+  -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5865f2" />
+      <stop offset="1" stop-color="#8b5cf6" />
+    </linearGradient>
+  </defs>
+
+  <rect width="64" height="64" rx="16" fill="url(#tile)" />
+
+  <!-- A tela. Cheia e branca, e não um contorno: contorno de 2px some no
+       tamanho da aba, e o que resta é uma mancha sem forma. -->
+  <rect x="12" y="16" width="40" height="27" rx="4.5" fill="#fff" />
+  <!-- O pé, em duas peças, que é o que faz a mancha branca virar "monitor". -->
+  <path d="M28.5 43h7l1 6h-9z" fill="#fff" opacity=".85" />
+  <rect x="23" y="49" width="18" height="3.5" rx="1.75" fill="#fff" opacity=".85" />
+
+  <!-- No ar. O anel do próprio degradê separa o ponto da tela sem precisar de
+       borda branca, que a esta distância engordaria o ponto até ele virar o
+       assunto do ícone. -->
+  <circle cx="49" cy="17" r="8" fill="url(#tile)" />
+  <circle cx="49" cy="17" r="5.5" fill="#f23f43" />
+</svg>
