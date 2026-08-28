@@ -370,8 +370,13 @@ body {
 }
 
 /* Com ferramenta escolhida ou zoom aplicado ela fica firme (`.fixa`): apagar no
-   meio de um desenho seria esconder justamente o controle que está em uso. */
+   meio de um desenho seria esconder justamente o controle que está em uso.
+   O quadro entra pela caixa, e não pelo tile: lá a barra não tem tile nenhum
+   que a contenha, e sem esta linha ela ficava sempre no apagado — dava para
+   ver que existia algo ali em cima, mas não o quê. */
 .tile-palco:hover .tools,
+.board-box:hover .tools,
+.tools:hover,
 .tools:focus-within,
 .tools.fixa {
   opacity: 1;
@@ -955,6 +960,25 @@ button {
   transition: opacity 0.25s;
 }
 
+/* Flutuando, a barra é uma camada da largura inteira sobre a imagem — e uma
+   camada rouba o ponteiro em toda a sua área, inclusive onde não há cápsula
+   nenhuma desenhada. Era essa faixa transparente que engolia a barra de
+   ferramentas: ela mora no alto ao centro, exatamente atrás da topbar, e nem o
+   clique nem o `:hover` que a acende chegavam lá. Em tela cheia e no quadro,
+   onde a barra encosta na borda de cima, não sobrava jeito nenhum de desenhar.
+
+   Quem recebe ponteiro é a cápsula, não a faixa. O resto é ar, e o que estiver
+   embaixo continua ao alcance. */
+#app.flutua .topbar,
+#app.flutua .bottombar {
+  pointer-events: none;
+}
+
+#app.flutua .topbar > *,
+#app.flutua .bottombar > * {
+  pointer-events: auto;
+}
+
 /* Coladas na borda as cápsulas encostam no canto do vídeo e ficam metade
    dentro, metade fora. O recuo é o mesmo em cima e embaixo: a barra flutua
    dentro da imagem, não pendurada na quina dela. */
@@ -980,6 +1004,15 @@ button {
 #app.flutua.ocioso .topbar,
 #app.flutua.ocioso .bottombar {
   opacity: 0;
+}
+
+/* Nas cápsulas, e não só na faixa: a regra acima devolveu o ponteiro a elas, e
+   sem repetir o desligamento aqui uma barra invisível continuaria recebendo o
+   clique que era do vídeo. */
+#app.flutua.ocioso .topbar,
+#app.flutua.ocioso .bottombar,
+#app.flutua.ocioso .topbar > *,
+#app.flutua.ocioso .bottombar > * {
   pointer-events: none;
 }
 

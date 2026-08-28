@@ -681,11 +681,11 @@ function buildTile(p, { palco = false, semVideo = false, slot: slotDado = null }
   if (stream) {
     tile.append(noDe(stream));
     if (palco) tile.append(buildFerramentas(alvoDoPalco(slot)));
-    tile.title = palco
-      ? telaCheia
-        ? 'Clique para sair da tela cheia'
-        : 'Clique para ver em tela cheia'
-      : 'Clique para ver em destaque';
+    // Só na lateral. No palco a dica seguia o cursor pela imagem inteira e
+    // aparecia por cima justamente de onde se está desenhando ou apontando —
+    // e ninguém precisa que lhe expliquem a tela que veio ver. Na lateral ela
+    // continua: ali a miniatura é pequena e o que o clique faz não é óbvio.
+    if (!palco) tile.title = 'Clique para ver em destaque';
     tile.addEventListener('click', aoClicar);
 
     // Entre pedir para assistir e o primeiro quadro chegar existe uma espera
