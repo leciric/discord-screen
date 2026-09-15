@@ -16,6 +16,9 @@ import { createPlayer } from './player.js';
 const BUFFER_MS = 80;
 const KEYFRAME = 1;
 const DELTA = 2;
+// Mesmo valor de PISO_JANELA_MS em player.js — não exportado, então duplicado
+// aqui como os outros parâmetros de tempo deste arquivo (ver BUFFER_MS acima).
+const PISO_JANELA_MS = 60_000;
 
 let agora = 0;
 let pendentes = [];
@@ -392,7 +395,9 @@ describe('saude', () => {
  *
  * Como o servidor nao pode ver, quem ve e quem recebe: o carimbo de envio vem
  * dentro do pacote. Isto testa que o player age nisso em vez de reproduzir o
- * passado com um ritmo lindo.
+ * passado com um ritmo lindo — e que ele nao confunde isso com o relogio da
+ * outra maquina estar so adiantado (ver `piso`), nem repete o pulo pra sempre
+ * enquanto o mesmo atraso persiste (ver `jaPulou`).
  */
 describe('pulo para o vivo', () => {
   /** Um pacote carimbado como enviado ha `atrasoMs`. */
@@ -416,7 +421,52 @@ describe('pulo para o vivo', () => {
     expect(onAtrasado).not.toHaveBeenCalled();
   });
 
-  it('atraso que persiste dispara o pulo', async () => {
+  it('desvio de relogio constante desde o primeiro pacote nao dispara', () => {
+    const onAtrasado = vi.fn();
+    const p = createPlayer(canvasFalso(), { onAtrasado });
+    p.start({ codec: 'vp8', codedWidth: 1280, codedHeight: 720 });
+
+    // O mesmo atraso enorme em todo pacote, desde sempre, e a assinatura de um
+    // relogio adiantado — nao de uma fila crescendo. `piso` acompanha esse
+    // minimo e o atraso medido contra ele fica sempre zero.
+    const real = Date.now;
+    let t = real();
+    Date.now = () => t;
+    p.push(atrasado(KEYFRAME, 0, 30_000));
+    t += 4000;
+    p.push(atrasado(KEYFRAME, 33, 30_000));
+    t += 4000;
+    p.push(atrasado(KEYFRAME, 66, 30_000));
+    t += 4000;
+    p.push(atrasado(KEYFRAME, 99, 30_000));
+    Date.now = real;
+
+    expect(onAtrasado).not.toHaveBeenCalled();
+  });
+
+  it('a janela do piso vencendo sozinha, com atraso estavel, nao produz pulo espurio', () => {
+    const onAtrasado = vi.fn();
+    const p = createPlayer(canvasFalso(), { onAtrasado });
+    p.start({ codec: 'vp8', codedWidth: 1280, codedHeight: 720 });
+
+    // Nenhum salto de origem aqui — só o relogio de parede andando o
+    // suficiente para a janela do piso vencer sozinha (ver PISO_JANELA_MS),
+    // com o mesmo atraso de sempre. Reaprender o piso do zero não pode custar
+    // um pulo: o pacote que vence a janela também é quem define o novo piso.
+    const real = Date.now;
+    let t = real();
+    Date.now = () => t;
+    p.push(atrasado(KEYFRAME, 0, 100));
+    t += PISO_JANELA_MS + 1000;
+    p.push(atrasado(DELTA, 33, 100));
+    t += PISO_JANELA_MS + 1000;
+    p.push(atrasado(DELTA, 66, 100));
+    Date.now = real;
+
+    expect(onAtrasado).not.toHaveBeenCalled();
+  });
+
+  it('atraso que cresce de verdade acima do piso dispara', () => {
     const onAtrasado = vi.fn();
     const p = createPlayer(canvasFalso(), { onAtrasado });
     p.start({ codec: 'vp8', codedWidth: 1280, codedHeight: 720 });
@@ -425,9 +475,11 @@ describe('pulo para o vivo', () => {
     const real = Date.now;
     let t = real();
     Date.now = () => t;
-    p.push(atrasado(KEYFRAME, 0, 30_000));
+    p.push(atrasado(KEYFRAME, 0, 100)); // estabelece o piso, sem desvio
+    t += 1000;
+    p.push(atrasado(DELTA, 33, 30_000)); // fila cresceu de verdade
     t += 5000;
-    p.push(atrasado(DELTA, 33, 30_000));
+    p.push(atrasado(DELTA, 66, 30_000)); // ainda alta 5s depois: persistiu
     Date.now = real;
 
     expect(onAtrasado).toHaveBeenCalledTimes(1);
@@ -454,11 +506,44 @@ describe('pulo para o vivo', () => {
     const real = Date.now;
     let t = real();
     Date.now = () => t;
-    p.push(atrasado(KEYFRAME, 0, 30_000));
-    t += 5000;
+    p.push(atrasado(KEYFRAME, 0, 100));
+    t += 1000;
     p.push(atrasado(DELTA, 33, 30_000));
+    t += 5000;
+    p.push(atrasado(DELTA, 66, 30_000));
     Date.now = real;
 
     expect(p.getSaude().pulos).toBe(1);
+  });
+
+  it('depois de disparar, o mesmo atraso nao dispara de novo antes de cair', () => {
+    const onAtrasado = vi.fn();
+    const p = createPlayer(canvasFalso(), { onAtrasado });
+    p.start({ codec: 'vp8', codedWidth: 1280, codedHeight: 720 });
+
+    const real = Date.now;
+    let t = real();
+    Date.now = () => t;
+
+    p.push(atrasado(KEYFRAME, 0, 100)); // piso baixo
+    t += 1000;
+    p.push(atrasado(KEYFRAME, 33, 4000)); // acima do piso, comeca a contar
+    t += 4000;
+    p.push(atrasado(KEYFRAME, 66, 4000)); // persistiu: pula (1)
+    t += 4000;
+    p.push(atrasado(KEYFRAME, 99, 4000)); // mesmo atraso: ja pulou, nao pula de novo
+    t += 4000;
+    p.push(atrasado(KEYFRAME, 132, 4000)); // idem
+    expect(onAtrasado).toHaveBeenCalledTimes(1);
+
+    t += 1000;
+    p.push(atrasado(KEYFRAME, 165, 100)); // atraso caiu de verdade: destrava
+    t += 1000;
+    p.push(atrasado(KEYFRAME, 198, 4000)); // sobe de novo
+    t += 4000;
+    p.push(atrasado(KEYFRAME, 231, 4000)); // persistiu de novo: pula (2)
+
+    Date.now = real;
+    expect(onAtrasado).toHaveBeenCalledTimes(2);
   });
 });

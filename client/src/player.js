@@ -130,17 +130,46 @@ const ATRASO_MAX_MS = 3000;
 /**
  * Por quanto tempo o atraso precisa se manter antes de valer o solavanco.
  *
- * O carimbo de envio vem do relógio de OUTRA máquina, e relógio de máquina
- * alheia erra — um desvio de alguns segundos entre dois computadores é comum e
- * não significa atraso nenhum. Um pico isolado também não: pode ser uma rajada
- * que a fila absorve sozinha no quadro seguinte.
+ * Um pico isolado não deveria custar um solavanco: pode ser uma rajada que a
+ * fila absorve sozinha no quadro seguinte. Exigir persistência é o que separa
+ * isso de fila que cresce de verdade.
  *
- * Exigir persistência não conserta o desvio de relógio (nada aqui conserta),
- * mas garante que o preço de errar seja pago no máximo uma vez: depois do
- * pulo, o atraso medido continua o mesmo se era desvio, e aí `ressincronizou`
- * para de subir porque a marca só é rearmada quando o atraso cai.
+ * O desvio de relógio entre as duas máquinas não é problema deste número — ver
+ * `piso`, que resolve isso medindo o atraso contra o próprio mínimo, e não
+ * contra zero. O que ESTE número garante é outro: que o preço de um pulo seja
+ * pago no máximo uma vez por incidente. Isso depende de `jaPulou` — sem ele, o
+ * mesmo atraso que acabou de pular reabriria o cronômetro no pacote seguinte e
+ * pularia de novo a cada ATRASO_PERSISTE_MS, para sempre. `jaPulou` só solta
+ * quando o atraso medido realmente cai abaixo do teto pelo menos uma vez.
  */
 const ATRASO_PERSISTE_MS = 4000;
+
+/**
+ * De quanto em quanto tempo o piso do atraso (ver `piso`) é esquecido e
+ * reaprendido do zero.
+ *
+ * O piso só sabe descer: é um mínimo, e mínimo histórico nunca sobe sozinho.
+ * Mas o desvio de relógio entre as duas máquinas não é fixo — cada uma anda num
+ * ritmo levemente diferente, e a diferença cresce devagar, minuto a minuto. Sem
+ * esquecer o piso de vez em quando, esse desvio se acumularia para sempre em
+ * cima de uma referência velha, e uma sessão comprida o bastante cruzaria
+ * ATRASO_MAX_MS sozinha, sem nenhum quadro atrasado de verdade.
+ *
+ * Um minuto é raro o bastante para o mínimo da janela continuar sendo o de uma
+ * janela de verdade — um pico de rede isolado não vira piso, porque o próximo
+ * pacote bom da mesma janela corrige de volta — e frequente o bastante para o
+ * desvio de relógio nunca chegar perto dos 3 s de ATRASO_MAX_MS antes de ser
+ * corrigido.
+ *
+ * O preço deste número: qualquer acúmulo mais lento que ele — um desvio que
+ * cresce menos de ATRASO_MAX_MS por PISO_JANELA_MS, uns 50 ms por segundo — é
+ * reaprendido como novo piso a cada janela e nunca dispara, mesmo que seja
+ * atraso de verdade e não desvio de relógio. É um limite aceitável (bem melhor
+ * que o laço infinito que existia antes desta janela) porque nenhuma rede real
+ * cresce tão devagar e por tanto tempo sem estabilizar ou piorar de vez — mas
+ * quem for mexer neste número precisa saber que é essa a troca que ele faz.
+ */
+const PISO_JANELA_MS = 60_000;
 
 export function createPlayer(canvas, { onError, onTamanho, onAtrasado } = {}) {
   const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
@@ -158,6 +187,30 @@ export function createPlayer(canvas, { onError, onTamanho, onAtrasado } = {}) {
   // Desde quando o atraso está acima do teto. `null` enquanto está sob controle.
   // Ver ATRASO_MAX_MS: é o relógio que decide quando pular para o vivo.
   let atrasadoDesde = null;
+  // Já pulou por causa deste atraso, e está esperando ele cair pelo menos uma
+  // vez antes de valer a pena rearmar `atrasadoDesde`. Ver ATRASO_PERSISTE_MS.
+  // Nome deliberadamente diferente de `s.travado`, em main.js — aquele é "a
+  // imagem parou de chegar", este é "já pulou por este atraso": são estados
+  // diferentes, em arquivos que se leem juntos.
+  let jaPulou = false;
+  // Menor `Date.now() - sentAt` visto desde a última vez que o relógio da
+  // origem foi detectado como outro — ver os dois `piso = Infinity` em draw(),
+  // mais abaixo: timestamp andando para trás e salto para a frente (SALTO_MS).
+  // Nem "engasgo de rede" (a outra metade daquele mesmo `if`) nem o pulo da
+  // própria vigiarAtraso resetam o piso — de propósito: nenhum dos dois muda o
+  // desvio de relógio entre as duas máquinas, e é exatamente numa fila
+  // crescendo de verdade (que aparece como rede engasgada) que o piso precisa
+  // continuar valendo para o atraso ser visto.
+  //
+  // Por construção esse mínimo é o desvio de relógio com quem transmite somado
+  // à menor latência que aquele caminho já entregou: não existe leitura mais
+  // baixa que essa sem a fila estar artificialmente vazia. Medir o atraso
+  // contra este piso, e não contra zero, é o que separa "os dois relógios não
+  // batem" de "a fila está crescendo de verdade" — um desvio constante nunca
+  // aparece acima do próprio piso.
+  let piso = Infinity;
+  // Quando o piso acima expira e é reaprendido do zero. Ver PISO_JANELA_MS.
+  let pisoJanelaAte = 0;
   // Quantas vezes já se pulou para o vivo. Sobe junto de "a rede daquela pessoa
   // não está entregando no ritmo", e é o número que separa isso de tudo o mais.
   let pulosParaOVivo = 0;
@@ -272,7 +325,9 @@ export function createPlayer(canvas, { onError, onTamanho, onAtrasado } = {}) {
    * Este é o único lugar do caminho que consegue ver o atraso de ponta a ponta.
    * O relay decide pelo `bufferedAmount`, que não enxerga o que já foi entregue
    * ao kernel — e são segundos de vídeo. Quem recebe tem o carimbo de envio
-   * dentro do pacote, e daqui a conta fecha.
+   * dentro do pacote, e daqui a conta fecha — contra `piso`, e não contra zero,
+   * porque o carimbo vem do relógio de OUTRA máquina: um espectador com o
+   * relógio adiantado não pode ler atraso nenhum só por isso.
    *
    * O pulo é o mesmo remédio do resto do arquivo: larga a fila e esquece a
    * referência de tempo. O primeiro quadro que chegar depois disso reancora
@@ -280,16 +335,32 @@ export function createPlayer(canvas, { onError, onTamanho, onAtrasado } = {}) {
    * do que um minuto de passado perfeitamente cadenciado.
    */
   function vigiarAtraso() {
-    if (lastLagMs <= ATRASO_MAX_MS) {
+    const agora = Date.now();
+
+    // A janela do piso venceu: reaprende do zero. Ver PISO_JANELA_MS.
+    if (agora > pisoJanelaAte) {
+      piso = Infinity;
+      pisoJanelaAte = agora + PISO_JANELA_MS;
+    }
+    if (lastLagMs < piso) piso = lastLagMs;
+
+    const atraso = lastLagMs - piso;
+
+    if (atraso <= ATRASO_MAX_MS) {
       atrasadoDesde = null;
+      jaPulou = false;
       return;
     }
 
-    const agora = Date.now();
+    // Já pulou por este mesmo atraso; só destrava quando ele cair de verdade,
+    // no bloco acima. Sem isto, o pacote seguinte reabriria o cronômetro e
+    // pularia de novo a cada ATRASO_PERSISTE_MS, para sempre — ver a nota lá.
+    if (jaPulou) return;
+
     atrasadoDesde ??= agora;
     if (agora - atrasadoDesde < ATRASO_PERSISTE_MS) return;
 
-    atrasadoDesde = null;
+    jaPulou = true;
     pulosParaOVivo++;
     esvaziar();
     base = null;
@@ -316,6 +387,13 @@ export function createPlayer(canvas, { onError, onTamanho, onAtrasado } = {}) {
     // Origem nova, ou timestamp que andou para trás (transmissão reiniciada):
     // não há o que traduzir a partir da referência antiga.
     if (base === null || tsMs < ultimoTs) reancorar(agora, tsMs);
+    // Timestamp andando para trás é transmissão nova de verdade — pode estar em
+    // outra máquina, com outro desvio de relógio, e o piso do atraso (ver
+    // `piso`, em vigiarAtraso) não vale mais. `base === null` sozinho NÃO entra
+    // aqui: é também o que o próprio pulo de vigiarAtraso força, e ali o piso
+    // deve sobreviver de propósito — é ele que garante que o mesmo atraso não
+    // pule de novo assim que a referência de tempo for refeita.
+    if (tsMs < ultimoTs) piso = Infinity;
     ultimoTs = tsMs;
 
     const exibirEm = base + tsMs;
@@ -335,6 +413,14 @@ export function createPlayer(canvas, { onError, onTamanho, onAtrasado } = {}) {
     if (folga < -BUFFER_MS || folga > BUFFER_MS + SALTO_MS) {
       ressincronizacoes++;
       esvaziar();
+      // Só o lado adiantado é desvio de relógio de verdade: o relógio da
+      // origem saltou para a frente (ver SALTO_MS, acima), e o piso velho não
+      // vale mais. O lado atrasado é rede engasgada — o desvio entre as duas
+      // máquinas não muda porque um pacote chegou tarde, e é exatamente isto
+      // que uma fila crescendo de verdade produz: `folga` bem negativa.
+      // Resetar o piso aqui cegaria o detector no momento em que ele mais
+      // precisa enxergar — ver a nota em `piso`, acima.
+      if (folga > BUFFER_MS + SALTO_MS) piso = Infinity;
       reancorar(agora, tsMs);
       pintar(frame);
       return;
@@ -464,6 +550,9 @@ export function createPlayer(canvas, { onError, onTamanho, onAtrasado } = {}) {
     desenhadosTotal = 0;
     pulosParaOVivo = 0;
     atrasadoDesde = null;
+    jaPulou = false;
+    piso = Infinity;
+    pisoJanelaAte = 0;
     // `codecTentado` NÃO é zerado aqui de propósito: `start()` chama `stop()`
     // antes de tentar, e zerar apagaria justamente o nome do codec que acabou
     // de ser recusado — que é a única informação útil nesse momento.

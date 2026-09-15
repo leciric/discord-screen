@@ -1690,6 +1690,14 @@ function handleViewer(ws, room, auth) {
       return;
     }
 
+    // Pede o próximo keyframe sem soltar o watch nem o peer — é o que
+    // `repedirImagem` usa para se recuperar de atraso sem obrigar quem
+    // transmite a renegociar WebRTC. Ver R.keyframe.
+    if (msg.type === 'keyframe' && Number.isInteger(msg.slot)) {
+      R.keyframe(room, ws, msg.slot);
+      return;
+    }
+
     // Envelope de sinalização a caminho de quem transmite. O servidor não abre:
     // offer, answer e candidato só fazem sentido para as duas pontas.
     if (msg.type === 'rtc' && Number.isInteger(msg.slot) && msg.payload) {

@@ -467,6 +467,49 @@ describe('watch e unwatch', () => {
   });
 });
 
+describe('keyframe', () => {
+  it('pede o keyframe sem soltar o watch nem o peer', () => {
+    const { room, viewer, ws, entry } = comTransmissao();
+    // O watch() que comTransmissao() já fez pediu um keyframe; zerar a marca
+    // isola o pedido que este teste está verificando.
+    entry.lastKeyframeAsk = 0;
+    ws.limpar();
+
+    R.keyframe(room, viewer, entry.slot);
+
+    expect(viewer.__watching.has(entry.slot)).toBe(true);
+    expect(ws.tipos()).toContain('need-keyframe');
+    expect(ws.tipos()).not.toContain('rtc-bye');
+  });
+
+  it('respeita o intervalo mínimo entre keyframes, como qualquer outro pedido', () => {
+    const { room, viewer, ws, entry } = comTransmissao();
+    // O watch() já pediu um keyframe agora mesmo: este pedido tem que ser
+    // ignorado pelo mesmo intervalo que vale para qualquer espectador.
+    ws.limpar();
+
+    R.keyframe(room, viewer, entry.slot);
+
+    expect(ws.tipos()).not.toContain('need-keyframe');
+  });
+
+  it('ignora quem não está assistindo o slot', () => {
+    const { room, viewer, ws, entry } = comTransmissao({ assistindo: false });
+    entry.lastKeyframeAsk = 0;
+    ws.limpar();
+
+    R.keyframe(room, viewer, entry.slot);
+
+    expect(ws.tipos()).toHaveLength(0);
+  });
+
+  it('ignora um slot que não existe', () => {
+    const { room, viewer } = salaComEspectador();
+
+    expect(() => R.keyframe(room, viewer, 3)).not.toThrow();
+  });
+});
+
 describe('setConfig e setAudioConfig', () => {
   it('a config nova obriga o espectador a esperar outro keyframe', () => {
     const { room, viewer, entry } = comTransmissao();

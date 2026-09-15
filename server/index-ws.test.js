@@ -369,6 +369,24 @@ describe('espectador', () => {
     expect(espectador.binarias).toHaveLength(antes);
   });
 
+  it('pede keyframe de novo sem soltar o watch nem derrubar o peer', async () => {
+    const { room, transmissor, espectador, slot } = await noAr();
+    const entry = room.slots.get(slot);
+    // O watch() de noAr() já pediu um keyframe agora mesmo; isola o pedido que
+    // este teste está verificando dos dois lados — marca e mensagens recebidas.
+    entry.lastKeyframeAsk = 0;
+    transmissor.recebidas.length = 0;
+
+    espectador.send(JSON.stringify({ type: 'keyframe', slot }));
+    await ate(transmissor, doTipo('need-keyframe'), 'o novo pedido de keyframe');
+
+    expect(transmissor.recebidas.some(doTipo('rtc-bye'))).toBe(false);
+
+    // Continua assistindo: o relay ainda entrega quadro para ele.
+    transmissor.send(quadro(slot, 1));
+    await ateBinario(espectador);
+  });
+
   it('pede a parada da própria transmissão, e só dela', async () => {
     const room = novaSala();
     const transmissor = await conectar(tokenDe(room.id, 'broadcaster', 'mesma'));

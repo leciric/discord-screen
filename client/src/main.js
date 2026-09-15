@@ -813,16 +813,14 @@ function repedirImagem(slot) {
     return;
   }
 
-  // Larga e pede de novo, em vez de só recomeçar o decodificador aqui.
-  //
-  // O decodificador reiniciado fica esperando um keyframe, e o `watch` do
-  // servidor pede um — mas só na entrada: repetir o pedido para um slot que já
-  // se assiste é ignorado de propósito, para um cliente em laço não inundar a
-  // sala. Sem largar antes, o botão dependeria do keyframe periódico e levaria
-  // até três segundos para fazer qualquer coisa visível; largando, a imagem
-  // volta no primeiro quadro que o servidor mandar.
-  ws?.send(JSON.stringify({ type: 'unwatch', slot }));
-  ws?.send(JSON.stringify({ type: 'watch', slot }));
+  // Pede o keyframe sem largar o slot: `unwatch` seguido de `watch` também
+  // funciona, mas pelo caminho caro — `unwatch` derruba a conexão direta do
+  // transmissor com este espectador e `watch` pede outra, obrigando quem
+  // transmite a renegociar o WebRTC inteiro (servidor ICE, peer novo, oferta,
+  // ICE gathering) só porque quem assiste ficou para trás. `keyframe` é o
+  // pedido barato: o servidor limpa o que travava o relay para este slot e
+  // pede o próximo keyframe pelo caminho normal, sem mexer no peer.
+  ws?.send(JSON.stringify({ type: 'keyframe', slot }));
 
   s.started = false;
   // `configKey` sai junto: sem isso o `startStream` acha que já está com esta
