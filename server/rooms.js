@@ -1178,6 +1178,35 @@ export function unwatch(room, ws, slot) {
   broadcastState(room);
 }
 
+/**
+ * Pede o próximo keyframe sem soltar o watch nem o peer.
+ *
+ * `unwatch` seguido de `watch` também traz um keyframe, mas pelo caminho caro:
+ * `unwatch` derruba a conexão direta (`encerrarPeer` manda `rtc-bye`) e `watch`
+ * pede outra (`rtc-want`), obrigando quem transmite a renegociar o WebRTC
+ * inteiro — buscar servidor ICE, `RTCPeerConnection` novo, oferta, ICE
+ * gathering — só porque quem assiste ficou para trás. É subida e CPU de quem
+ * transmite, gastas para consertar um problema de quem assiste, e é
+ * exatamente esse recurso que falta quando o atraso já está subindo.
+ *
+ * Aqui não se toca em `__watching` nem no peer: só se limpa o que travava o
+ * relay para este espectador (`__primed`/`__afogado`, a mesma limpeza de
+ * `watch`) e se pede o keyframe pelo caminho normal.
+ */
+export function keyframe(room, ws, slot) {
+  const entry = room.slots.get(slot);
+  if (!entry || !entry.streaming || !ws.__watching.has(slot)) return;
+
+  ws.__primed.delete(slot);
+  ws.__afogado?.delete(slot);
+  // Sem `urgente`: isto vem do cliente, e furar o intervalo mínimo
+  // transformaria um cliente preso num laço em quem transmite mandando o
+  // quadro mais caro que existe a cada poucos milissegundos, contra a sala
+  // inteira. `urgente` é só para quem ficou sem imagem nenhuma voltando do
+  // WebRTC — ver rtcAtivo.
+  requestKeyframe(entry);
+}
+
 // -------------------------------------------------------------- anotações
 
 function novaAnn() {

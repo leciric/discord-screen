@@ -135,11 +135,15 @@ O relógio de envio serve só para medir atraso. É exato na mesma máquina; ent
 máquinas diferentes, aproximado.
 
 Controle vai em JSON: `start`, `config`, `audio-config`, `stop`, `rtc`
-(transmissor → servidor); `watch`, `unwatch`, `rename`, `stop-broadcast`, `ann`,
-`quadro`, `rtc`, `rtc-ativo` (espectador → servidor); `state`, `stream-start`,
-`config`, `audio-config`, `stream-stop`, `need-keyframe`, `stop-request`,
-`rtc-want`, `rtc`, `rtc-bye`, `chunks`, `ann`, `ann-sync`, `quadro`,
-`quadro-sync`, `error` (servidor → clientes).
+(transmissor → servidor); `watch`, `unwatch`, `keyframe`, `rename`,
+`stop-broadcast`, `ann`, `quadro`, `rtc`, `rtc-ativo` (espectador → servidor);
+`state`, `stream-start`, `config`, `audio-config`, `stream-stop`,
+`need-keyframe`, `stop-request`, `rtc-want`, `rtc`, `rtc-bye`, `chunks`, `ann`,
+`ann-sync`, `quadro`, `quadro-sync`, `error` (servidor → clientes).
+
+`keyframe` pede o próximo keyframe sem soltar o `watch`: é o caminho barato de
+`unwatch`+`watch` para quem só precisa de um ponto de partida novo, sem pagar a
+renegociação de WebRTC que largar o slot custaria.
 
 As anotações (`ann`) carregam coordenadas normalizadas ao quadro, em inteiros de
 0 a 4095 — não em pixels de tela. Cada pessoa assiste num tamanho e num zoom
