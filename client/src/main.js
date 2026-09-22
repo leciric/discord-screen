@@ -821,6 +821,9 @@ function repedirImagem(slot) {
   // pedido barato: o servidor limpa o que travava o relay para este slot e
   // pede o próximo keyframe pelo caminho normal, sem mexer no peer.
   ws?.send(JSON.stringify({ type: 'keyframe', slot }));
+  // E a conexão direta, se ela tiver ficado para trás: é a outra metade do que
+  // parar e voltar a assistir consertava.
+  pedirRtcDeNovo(slot);
 
   s.started = false;
   // `configKey` sai junto: sem isso o `startStream` acha que já está com esta
@@ -2356,6 +2359,10 @@ function openStream(slot, userId) {
       s.started = true;
       renderGrid();
     },
+    // O aviso de travado saiu de cena: a imagem está sendo desenhada de novo.
+    onDesenho: () => {
+      if (s.travado) voltouAImagem(slot);
+    },
     // Ficou longe demais do vivo. O player já largou a fila e esqueceu a
     // referência de tempo; o que falta é o que só daqui se alcança — pedir a
     // imagem de novo, que é o que traz o keyframe para recomeçar.
@@ -2412,6 +2419,10 @@ function montarSuperficie(slot, userId, canvas, video) {
     // e não o estado do RTCPeerConnection, que decide o que vai para a tela.
     viaRtc: false,
     prazoRtc: null,
+    // Nova tentativa da conexão direta depois de ela cair, e o prazo da
+    // próxima. Ver agendarReconvite.
+    reconvite: null,
+    reconviteMs: null,
     // Prévia da própria captura, e não algo que veio pela rede.
     local: false,
     // Vira true no primeiro quadro desenhado. Até lá o tile mostra "Conectando…"
@@ -2526,6 +2537,7 @@ function closeStream(slot) {
   if (!s) return;
   s.player?.stop();
   s.audio?.stop();
+  clearTimeout(s.reconvite);
   fecharPeer(s);
   s.flutuante?.parar();
   s.ann.parar();
@@ -2647,6 +2659,8 @@ function assumirRtc(slot) {
   s.viaRtc = true;
   clearTimeout(s.prazoRtc);
   s.prazoRtc = null;
+  clearTimeout(s.reconvite);
+  s.reconviteMs = null;
 
   // O som passa a sair do <video>; manter o decodificador de áudio tocando
   // junto daria eco com meio segundo de diferença entre os dois caminhos.
@@ -2690,6 +2704,42 @@ function desistirDoRtc(slot) {
   }
 
   if (watching.has(slot)) ws?.send(JSON.stringify({ type: 'rtc-ativo', slot, on: false }));
+  // Também quando a nova tentativa não chegou a assumir (`reconviteMs` já
+  // armado): sem isso a primeira tentativa frustrada seria a última. A conexão
+  // que nunca fechou desde o começo não entra aqui — nela a rede já disse não.
+  if (estava || s.reconviteMs) agendarReconvite(slot);
+}
+
+/**
+ * Tenta a conexão direta de novo, algum tempo depois de ela cair.
+ *
+ * Antes, cair para o relay era para sempre: o convite só saía num `watch`
+ * novo, e quem assistia ficava no caminho mais lento — e mais atrasado — até
+ * parar de assistir e assistir de novo, que foi o conserto que as pessoas
+ * descobriram sozinhas. Aqui o programa faz isso por elas, sem soltar a tela.
+ *
+ * O prazo dobra a cada queda seguida, porque uma rede que não sustenta a
+ * conexão direta não vai passar a sustentar porque se insistiu; e volta ao
+ * começo quando ela assume de novo (ver `assumirRtc`).
+ */
+const RECONVITE_BASE_MS = 15_000;
+const RECONVITE_MAX_MS = 5 * 60_000;
+
+function agendarReconvite(slot) {
+  const s = streams.get(slot);
+  if (!s || s.local || !suportaWebRTC()) return;
+
+  clearTimeout(s.reconvite);
+  const ms = s.reconviteMs ?? RECONVITE_BASE_MS;
+  s.reconviteMs = Math.min(RECONVITE_MAX_MS, ms * 2);
+  s.reconvite = setTimeout(() => pedirRtcDeNovo(slot), ms);
+}
+
+function pedirRtcDeNovo(slot) {
+  const s = streams.get(slot);
+  if (!s || s.local || s.viaRtc || s.pc || !watching.has(slot) || !suportaWebRTC()) return;
+  if (ws?.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type: 'rtc-de-novo', slot }));
 }
 
 function fecharPeer(s) {
@@ -2828,11 +2878,59 @@ let vigiaTimer = null;
 /** Quantos quadros cada tela já tinha na leitura anterior. */
 const marcaDeQuadros = new Map();
 
+/**
+ * A página está pintando? Levantada por um requestAnimationFrame pedido a cada
+ * leitura do vigia, e conferida na leitura seguinte.
+ *
+ * O vigia conta quadros DESENHADOS, e com a janela minimizada, a aba em
+ * segundo plano ou o Discord escondido o navegador para de desenhar — o
+ * requestAnimationFrame do player não roda, e o <video> da conexão direta para
+ * de compor. Os bytes continuam chegando, a transmissão está perfeita, e o
+ * contador parado era lido como travamento: era exatamente o "a imagem parou
+ * de chegar" que aparecia ao voltar para a janela, e a conexão direta
+ * derrubada para o relay por uma tela que só não estava sendo olhada.
+ *
+ * `document.hidden` sozinho não basta: dentro do Discord a janela pode estar
+ * coberta ou minimizada sem que a página fique sabendo. Um quadro de animação
+ * que não rodou em cinco segundos é a prova que vale em qualquer caso.
+ */
+let pedidoDePintura = false;
+
+function conferirPintura() {
+  // O pedido da leitura anterior ainda não rodou: não houve pintura desde lá.
+  if (pedidoDePintura) return false;
+  pedidoDePintura = true;
+  requestAnimationFrame(() => (pedidoDePintura = false));
+  return !document.hidden;
+}
+
+// Voltando a olhar, a contagem recomeça: a leitura de antes de esconder é de
+// um intervalo em que nada podia ser desenhado.
+document.addEventListener('visibilitychange', () => marcaDeQuadros.clear());
+
+/** A imagem voltou a ser desenhada: o aviso sai na hora, sem esperar o vigia. */
+function voltouAImagem(slot) {
+  const s = streams.get(slot);
+  if (!s?.travado) return;
+  s.travado = false;
+  marcaDeQuadros.delete(slot);
+  renderGrid();
+}
+
 function ensureVigia() {
   if (vigiaTimer) return;
   vigiaTimer = setInterval(() => {
     const telas = [];
     let mudou = false;
+
+    // Sem pintura não há o que medir. A contagem é esquecida, e não só
+    // pausada, para a primeira leitura depois da volta não comparar com a de
+    // antes de sumir. Nem o boletim sai: ele diria "travado" ao servidor pelo
+    // mesmo motivo errado.
+    if (!conferirPintura()) {
+      marcaDeQuadros.clear();
+      return;
+    }
 
     for (const [slot, s] of streams) {
       // A prévia da própria captura não veio pela rede: não há travamento
@@ -3687,6 +3785,51 @@ async function post(url, body, { retry = true } = {}) {
 
 // ----------------------------------------------------------------- websocket
 
+/**
+ * Diz ao servidor até onde cada tela chegou, pelo carimbo de envio do pacote.
+ *
+ * É o que deixa o relay ver a fila que mora nos proxies — o nginx, e dentro do
+ * Discord o proxy dele — e que o `bufferedAmount` do servidor não enxerga. Sem
+ * isto, quem assiste escorregava segundos para o passado sem ninguém notar, e
+ * com a janela minimizada o cano enchia de minutos de vídeo velho. Ver
+ * `atrasoEntregaMs`, no servidor.
+ *
+ * Mandado daqui, na chegada do pacote, e não por um relógio: timer de aba em
+ * segundo plano é estrangulado, e a confirmação atrasada pelo navegador seria
+ * lida como atraso da rede.
+ *
+ * No máximo uma a cada ACK_MS por tela, mas a última nunca se perde: uma fila
+ * inteira despejada de uma vez chega em poucos milissegundos, e sem o envio
+ * atrasado o servidor ficaria com uma confirmação do começo dela — esperando,
+ * para sempre, uma entrega que já aconteceu.
+ */
+const ACK_MS = 100;
+const acks = new Map();
+
+function confirmarEntrega(slot, t) {
+  if (!Number.isFinite(t)) return;
+  let a = acks.get(slot);
+  if (!a) {
+    a = { em: 0, t: null, timer: null };
+    acks.set(slot, a);
+  }
+  a.t = t;
+
+  const agora = performance.now();
+  if (agora - a.em >= ACK_MS) {
+    enviarConfirmacao(slot, a, agora);
+    return;
+  }
+  a.timer ??= setTimeout(() => enviarConfirmacao(slot, a, performance.now()), ACK_MS);
+}
+
+function enviarConfirmacao(slot, a, agora) {
+  clearTimeout(a.timer);
+  a.timer = null;
+  a.em = agora;
+  if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ack', slot, t: a.t }));
+}
+
 function connect() {
   if (!roomTokens) return;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -3717,6 +3860,7 @@ function connect() {
     // para qual decodificador — som e imagem dividem o mesmo canal.
     if (typeof e.data !== 'string') {
       const view = new DataView(e.data);
+      confirmarEntrega(view.getUint8(0), view.getFloat64(10));
       const s = streams.get(view.getUint8(0));
       if (!s) return;
       if (view.getUint8(1) === 3) s.audio?.push(e.data);
@@ -3831,6 +3975,8 @@ function connect() {
   });
 
   ws.addEventListener('close', () => {
+    for (const a of acks.values()) clearTimeout(a.timer);
+    acks.clear();
     closeAllStreams();
     available.clear();
     watching.clear();

@@ -1680,6 +1680,13 @@ function handleViewer(ws, room, auth) {
       return;
     }
 
+    // Até onde a tela chegou de fato. É a mensagem mais frequente deste canal,
+    // e por isso vem antes de todas: ver R.confirmarEntrega.
+    if (msg.type === 'ack' && Number.isInteger(msg.slot)) {
+      R.confirmarEntrega(room, ws, msg.slot, msg.t);
+      return;
+    }
+
     if (msg.type === 'watch' && Number.isInteger(msg.slot)) {
       R.watch(room, ws, msg.slot);
       return;
@@ -1709,6 +1716,12 @@ function handleViewer(ws, room, auth) {
     // ele vê quadro chegando — e é isso que liga e desliga o relay para ele.
     if (msg.type === 'rtc-ativo' && Number.isInteger(msg.slot)) {
       R.rtcAtivo(room, ws, msg.slot, Boolean(msg.on));
+      return;
+    }
+
+    // Quem caiu para o relay pede a conexão direta de volta. Ver R.reconvidarRtc.
+    if (msg.type === 'rtc-de-novo' && Number.isInteger(msg.slot)) {
+      R.reconvidarRtc(room, ws, msg.slot);
       return;
     }
 

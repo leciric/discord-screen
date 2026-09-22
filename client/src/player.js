@@ -171,7 +171,7 @@ const ATRASO_PERSISTE_MS = 4000;
  */
 const PISO_JANELA_MS = 60_000;
 
-export function createPlayer(canvas, { onError, onTamanho, onAtrasado } = {}) {
+export function createPlayer(canvas, { onError, onTamanho, onAtrasado, onDesenho } = {}) {
   const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
 
   let decoder = null;
@@ -528,6 +528,11 @@ export function createPlayer(canvas, { onError, onTamanho, onAtrasado } = {}) {
       virgem = false;
       onTamanho?.();
     }
+
+    // A cada quadro, e não só no primeiro: é o que tira o aviso de "a imagem
+    // parou de chegar" no instante em que ela volta, em vez de deixá-lo por
+    // cima de uma tela que já está andando até a próxima leitura do vigia.
+    onDesenho?.();
   }
 
   function stop() {

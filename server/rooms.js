@@ -61,6 +61,26 @@ export const ajustes = {
   atrasoRelayMs: 500,
 
   /**
+   * O mesmo freio de cima, medido onde ele não é cego: do lado de quem recebe.
+   *
+   * `bufferedAmount` só conta o que o Node ainda não entregou ao sistema. Em
+   * produção o Node entrega ao nginx pela própria máquina, instantaneamente, e
+   * dentro do Discord há ainda o proxy dele no meio: a fila de verdade mora
+   * nesses dois, e o `bufferedAmount` fica em zero enquanto quem assiste
+   * escorrega segundos — e, com a janela minimizada, minutos — para o passado.
+   *
+   * Quem assiste confirma o carimbo de envio do último pacote que recebeu (ver
+   * `confirmarEntrega`), e a distância entre ele e o último pacote mandado é o
+   * atraso que está no cano, com proxy e tudo. É tempo do relógio de quem
+   * transmite dos dois lados, então não há desvio de relógio na conta.
+   *
+   * Um segundo e meio cabe um keyframe grande atravessando uma conexão comum
+   * mais o tempo de ida e volta, e é bem menos que a queixa de "estou vendo o
+   * passado".
+   */
+  atrasoEntregaMs: 1500,
+
+  /**
    * Teto absoluto da fila de um espectador. Este é o freio de memória, e é
    * outro problema do de cima: sem ele, um espectador que parou de vazar faz o
    * processo inteiro crescer.
@@ -92,6 +112,13 @@ export const LIMITES = {
     passo: 50,
     unidade: 'ms',
     rotulo: 'Atraso tolerado na fila',
+  },
+  atrasoEntregaMs: {
+    min: 300,
+    max: 10_000,
+    passo: 100,
+    unidade: 'ms',
+    rotulo: 'Atraso tolerado até quem assiste',
   },
   bufferMaxBytes: {
     min: 256 * 1024,
@@ -298,6 +325,72 @@ function medirTaxa(entry, bytes) {
 function tetoDe(entry) {
   const porTempo = ((entry.taxaBytes ?? 0) * ajustes.atrasoRelayMs) / 1000;
   return Math.min(ajustes.bufferMaxBytes, Math.max(ajustes.tetoMinBytes, porTempo));
+}
+
+/**
+ * Quanto do que foi mandado a este espectador ainda não chegou, em ms.
+ *
+ * Zero enquanto ele não confirmou nada: cliente antigo não confirma, e para
+ * ele o freio continua sendo só o `bufferedAmount`, como sempre foi.
+ */
+function atrasoDeEntrega(ws, slot) {
+  const e = ws.__entrega?.get(slot);
+  if (e?.recebido === undefined || e.enviado === undefined) return 0;
+  return Math.max(0, e.enviado - e.recebido);
+}
+
+/**
+ * A fila deste espectador passou de `fator` vezes o teto — em bytes, pelo que
+ * o Node vê, ou em tempo, pelo que ele confirmou. Qualquer um dos dois basta.
+ */
+function apertado(ws, slot, teto, fator = 1) {
+  return (
+    ws.bufferedAmount > teto * fator || atrasoDeEntrega(ws, slot) > ajustes.atrasoEntregaMs * fator
+  );
+}
+
+/** O carimbo de envio do pacote: [1B slot][1B tipo][8B ts][8B envio]. */
+function carimboDe(chunk) {
+  if (!chunk || chunk.length < 18 || typeof chunk.readDoubleBE !== 'function') return null;
+  const t = chunk.readDoubleBE(10);
+  return Number.isFinite(t) ? t : null;
+}
+
+function marcarEnvio(ws, slot, carimbo, { video = true } = {}) {
+  if (carimbo === null) return;
+  ws.__entrega ??= new Map();
+  const e = ws.__entrega.get(slot);
+  if (!e) {
+    ws.__entrega.set(slot, { enviado: carimbo, recebido: undefined, pausado: false });
+    return;
+  }
+  e.enviado = carimbo;
+  // Primeiro quadro depois de uma pausa: entre o último mandado antes dela e
+  // este não há nada no cano — são quadros que não foram mandados. Sem zerar a
+  // referência aqui, esse buraco seria lido como atraso, e o delta seguinte ao
+  // keyframe que acabou de trazer a imagem de volta seria largado de novo.
+  //
+  // Só o vídeo retoma: o áudio segue passando durante a pausa do vídeo, e
+  // zerar por ele faria o freio soltar antes de o cano esvaziar de verdade.
+  if (e.pausado && video) {
+    e.recebido = carimbo;
+    e.pausado = false;
+  }
+}
+
+/**
+ * Quem assiste confirma até onde recebeu, pelo carimbo de envio do pacote.
+ *
+ * O último, e não o maior: TCP entrega em ordem, então o último recebido é o
+ * mais novo — e um relógio de quem transmite que ande para trás faria o maior
+ * travar a conta num valor que nunca mais seria alcançado.
+ */
+export function confirmarEntrega(room, ws, slot, carimbo) {
+  if (!Number.isFinite(carimbo) || !ws.__watching?.has(slot)) return;
+  const e = ws.__entrega?.get(slot);
+  // Confirmação sem nada mandado é de uma rodada anterior deste slot.
+  if (!e) return;
+  e.recebido = carimbo;
 }
 
 // Uma pessoa pode ter duas transmissões ao mesmo tempo, então o uid sozinho não
@@ -1002,6 +1095,8 @@ export function setConfig(room, entry, config) {
 function afogar(ws, entry) {
   ws.__primed?.delete(entry.slot);
   ws.__afogado?.add(entry.slot);
+  const e = ws.__entrega?.get(entry.slot);
+  if (e) e.pausado = true;
 }
 
 export function pushChunk(room, entry, chunk) {
@@ -1016,6 +1111,7 @@ export function pushChunk(room, entry, chunk) {
   const teto = tetoDe(entry);
 
   const tipo = chunk[TYPE_BYTE];
+  const carimbo = carimboDe(chunk);
   const isKeyframe = tipo === KEYFRAME;
   const isAudio = tipo === AUDIO;
   let sentCopies = 0;
@@ -1041,11 +1137,12 @@ export function pushChunk(room, entry, chunk) {
     // Áudio não depende de keyframe — cada pacote Opus se decodifica sozinho —,
     // então não passa pelo controle de "já recebeu ponto de partida".
     if (isAudio) {
-      if (v.bufferedAmount > teto) {
+      if (apertado(v, entry.slot, teto)) {
         descartar();
         continue;
       }
       v.send(chunk);
+      marcarEnvio(v, entry.slot, carimbo, { video: false });
       sentCopies++;
       v.__mediaBytesOut = (v.__mediaBytesOut ?? 0) + bytes;
       continue;
@@ -1057,7 +1154,7 @@ export function pushChunk(room, entry, chunk) {
     // fazia o ciclo se repetir a cada segundo em vez de acabar. O pedido sai
     // quando a fila cair pela metade, que é quando ele tem chance de chegar.
     if (v.__afogado?.has(entry.slot)) {
-      if (v.bufferedAmount > teto / 2) {
+      if (apertado(v, entry.slot, teto, 0.5)) {
         descartar();
         continue;
       }
@@ -1071,12 +1168,13 @@ export function pushChunk(room, entry, chunk) {
     }
 
     if (isKeyframe) {
-      if (v.bufferedAmount > teto * 2) {
+      if (apertado(v, entry.slot, teto, 2)) {
         descartar();
         afogar(v, entry);
         continue;
       }
       v.send(chunk);
+      marcarEnvio(v, entry.slot, carimbo);
       sentCopies++;
       v.__mediaBytesOut = (v.__mediaBytesOut ?? 0) + bytes;
       v.__primed.add(entry.slot);
@@ -1085,7 +1183,7 @@ export function pushChunk(room, entry, chunk) {
 
     if (!v.__primed.has(entry.slot)) continue;
 
-    if (v.bufferedAmount > teto) {
+    if (apertado(v, entry.slot, teto)) {
       descartar();
 
       // Um delta perdido quebra a cadeia de referência: daqui em diante o
@@ -1097,6 +1195,7 @@ export function pushChunk(room, entry, chunk) {
       continue;
     }
     v.send(chunk);
+    marcarEnvio(v, entry.slot, carimbo);
     sentCopies++;
     v.__mediaBytesOut = (v.__mediaBytesOut ?? 0) + bytes;
   }
@@ -1121,6 +1220,7 @@ export function stopStream(room, entry) {
     v.__afogado?.delete(entry.slot);
     v.__watching?.delete(entry.slot);
     v.__rtc?.delete(entry.slot);
+    v.__entrega?.delete(entry.slot);
   }
   entry.chunksLigados = undefined;
   toViewers(room, { type: 'stream-stop', slot: entry.slot });
@@ -1148,6 +1248,7 @@ export function watch(room, ws, slot) {
   ws.__watching.add(slot);
   ws.__primed.delete(slot);
   ws.__afogado?.delete(slot);
+  ws.__entrega?.delete(slot);
 
   if (entry.config) sendJson(ws, { type: 'config', slot, config: entry.config });
   if (entry.audioConfig) {
@@ -1174,6 +1275,7 @@ export function unwatch(room, ws, slot) {
   if (!ws.__watching.delete(slot)) return;
   ws.__primed.delete(slot);
   ws.__afogado?.delete(slot);
+  ws.__entrega?.delete(slot);
   encerrarPeer(room, ws, slot);
   broadcastState(room);
 }
@@ -1554,10 +1656,44 @@ export function rtcAtivo(room, ws, slot, ativo) {
     // A fila dele passou o tempo do WebRTC sem receber nada do relay: não há
     // afogamento a herdar, e mantê-lo adiaria o keyframe que traz a imagem.
     ws.__afogado?.delete(slot);
+    // O que se sabia da entrega é de antes do WebRTC, e compará-lo com o
+    // primeiro pacote de agora acusaria como atraso o tempo em que ele esteve
+    // do outro caminho.
+    ws.__entrega?.delete(slot);
     requestKeyframe(entry, { urgente: true });
   }
 
   atualizarChunks(room, entry);
+}
+
+/**
+ * Convida o transmissor a abrir a conexão direta de novo com este espectador.
+ *
+ * Sem isto, a volta ao relay era para sempre: o convite só saía num `watch`
+ * novo, e por isso a única saída que as pessoas acharam foi parar de assistir
+ * e assistir de novo. A conexão direta pode ter caído por uma janela
+ * minimizada, por uma troca de rede, por um instante — nada disso é motivo
+ * para passar o resto da sessão no caminho mais lento.
+ *
+ * O `rtc-bye` vai antes porque o transmissor ignora convite para quem ele
+ * ainda acha que tem peer, e o peer velho dele pode levar meio minuto para se
+ * dar por morto sozinho. O intervalo é o mesmo cuidado do keyframe: um cliente
+ * em laço não pode obrigar quem transmite a renegociar sem parar.
+ */
+export const RECONVITE_MIN_MS = 10_000;
+
+export function reconvidarRtc(room, ws, slot) {
+  const entry = room.slots.get(slot);
+  if (!entry?.streaming || !ws.__watching?.has(slot) || ws.__rtc?.has(slot)) return false;
+
+  const agora = Date.now();
+  ws.__reconvite ??= new Map();
+  if (agora - (ws.__reconvite.get(slot) ?? 0) < RECONVITE_MIN_MS) return false;
+  ws.__reconvite.set(slot, agora);
+
+  sendJson(entry.ws, { type: 'rtc-bye', peer: ws.__peerId });
+  sendJson(entry.ws, { type: 'rtc-want', peer: ws.__peerId });
+  return true;
 }
 
 /** Desfaz a conexão direta de um espectador com um slot, dos dois lados. */
@@ -1601,6 +1737,8 @@ export function attachViewer(room, ws, info) {
   // Slots que já chegam por WebRTC. Enquanto o slot está aqui, o relay não
   // manda os bytes dele para este espectador — seria o mesmo vídeo duas vezes.
   ws.__rtc = new Set();
+  // Até onde cada tela chegou de fato a este espectador. Ver atrasoEntregaMs.
+  ws.__entrega = new Map();
   ws.__peerId ??= `p${proximoPeerId++}`;
   ws.__info = info;
   ws.__connectedAt = ws.__connectedAt ?? Date.now();

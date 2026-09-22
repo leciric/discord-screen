@@ -1283,3 +1283,107 @@ describe('gerarCodigoPeloPainel', () => {
     expect(R.checkPassword(room, novo).ok).toBe(true);
   });
 });
+
+/** Um quadro com o carimbo de envio de quem transmite, no byte 10. */
+function carimbado(slot, tipo, carimbo) {
+  const buffer = quadro(slot, tipo);
+  buffer.writeDoubleBE(carimbo, 10);
+  return buffer;
+}
+
+describe('confirmarEntrega', () => {
+  // O cenário do proxy: o `bufferedAmount` fica em zero porque o Node entrega
+  // ao nginx na hora, e a fila de verdade só aparece na confirmação.
+  it('para de mandar deltas quando quem assiste não confirma o que recebeu', () => {
+    const { room, viewer, entry } = comTransmissao();
+    R.pushChunk(room, entry, carimbado(entry.slot, KEYFRAME, 1000));
+    R.confirmarEntrega(room, viewer, entry.slot, 1000);
+
+    R.pushChunk(room, entry, carimbado(entry.slot, DELTA, 1500));
+    R.pushChunk(room, entry, carimbado(entry.slot, DELTA, 2600));
+    // Nada disso foi confirmado: 3000 - 1000 passa do teto de 1500 ms.
+    R.pushChunk(room, entry, carimbado(entry.slot, DELTA, 3000));
+
+    expect(viewer.binarios()).toHaveLength(3);
+    expect(viewer.__afogado.has(entry.slot)).toBe(true);
+  });
+
+  it('volta a mandar, a partir de um keyframe, quando a fila chega do outro lado', () => {
+    const { room, viewer, entry } = comTransmissao();
+    R.pushChunk(room, entry, carimbado(entry.slot, KEYFRAME, 1000));
+    R.confirmarEntrega(room, viewer, entry.slot, 1000);
+    R.pushChunk(room, entry, carimbado(entry.slot, DELTA, 2600));
+    R.pushChunk(room, entry, carimbado(entry.slot, DELTA, 4200));
+    expect(viewer.__afogado.has(entry.slot)).toBe(true);
+
+    // Chegou tudo o que foi mandado: o cano esvaziou.
+    R.confirmarEntrega(room, viewer, entry.slot, 2600);
+    viewer.limpar();
+
+    R.pushChunk(room, entry, carimbado(entry.slot, KEYFRAME, 5000));
+    R.pushChunk(room, entry, carimbado(entry.slot, DELTA, 5033));
+    expect(viewer.binarios()).toHaveLength(2);
+    expect(viewer.__afogado.has(entry.slot)).toBe(false);
+  });
+
+  it('não freia quem nunca confirmou: cliente antigo segue só pelo bufferedAmount', () => {
+    const { room, viewer, entry } = comTransmissao();
+    R.pushChunk(room, entry, carimbado(entry.slot, KEYFRAME, 1000));
+    R.pushChunk(room, entry, carimbado(entry.slot, DELTA, 60_000));
+    expect(viewer.binarios()).toHaveLength(2);
+  });
+
+  it('esquece a entrega ao voltar do WebRTC, em vez de acusar o tempo que passou lá', () => {
+    const { room, viewer, entry } = comTransmissao();
+    R.pushChunk(room, entry, carimbado(entry.slot, KEYFRAME, 1000));
+    R.confirmarEntrega(room, viewer, entry.slot, 1000);
+    R.rtcAtivo(room, viewer, entry.slot, true);
+    R.rtcAtivo(room, viewer, entry.slot, false);
+    viewer.limpar();
+
+    R.pushChunk(room, entry, carimbado(entry.slot, KEYFRAME, 90_000));
+    R.pushChunk(room, entry, carimbado(entry.slot, DELTA, 90_033));
+    expect(viewer.binarios()).toHaveLength(2);
+  });
+
+  it('ignora confirmação de quem não está assistindo', () => {
+    const { room, viewer, entry } = comTransmissao();
+    R.pushChunk(room, entry, carimbado(entry.slot, KEYFRAME, 1000));
+    R.unwatch(room, viewer, entry.slot);
+    expect(() => R.confirmarEntrega(room, viewer, entry.slot, 1000)).not.toThrow();
+    expect(viewer.__entrega.has(entry.slot)).toBe(false);
+  });
+});
+
+describe('reconvidarRtc', () => {
+  it('derruba o peer velho e convida de novo, nesta ordem', () => {
+    const { room, viewer, ws, entry } = comTransmissao();
+    expect(R.reconvidarRtc(room, viewer, entry.slot)).toBe(true);
+    expect(ws.mensagens()).toEqual([
+      { type: 'rtc-bye', peer: viewer.__peerId },
+      { type: 'rtc-want', peer: viewer.__peerId },
+    ]);
+  });
+
+  it('não convida quem já está na conexão direta, nem quem não assiste', () => {
+    const { room, viewer, entry } = comTransmissao();
+    R.rtcAtivo(room, viewer, entry.slot, true);
+    expect(R.reconvidarRtc(room, viewer, entry.slot)).toBe(false);
+
+    const outra = comTransmissao({ assistindo: false });
+    expect(R.reconvidarRtc(outra.room, outra.viewer, outra.entry.slot)).toBe(false);
+  });
+
+  it('segura um cliente em laço: um convite por intervalo', () => {
+    vi.useFakeTimers();
+    try {
+      const { room, viewer, entry } = comTransmissao();
+      expect(R.reconvidarRtc(room, viewer, entry.slot)).toBe(true);
+      expect(R.reconvidarRtc(room, viewer, entry.slot)).toBe(false);
+      vi.advanceTimersByTime(R.RECONVITE_MIN_MS);
+      expect(R.reconvidarRtc(room, viewer, entry.slot)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
