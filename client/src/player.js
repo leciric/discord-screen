@@ -67,9 +67,20 @@ const FILA_MAX = 12;
  * nenhum era desenhado de fato. Era isso que aparecia como "travou" e como
  * "0 fps" ao mesmo tempo.
  *
- * Um segundo é mais que qualquer rajada de rede — uma fila inteira de FILA_MAX
- * quadros a 30 fps são 400 ms, e é ela que decide o maior adiantamento legítimo
- * — e é muito menos que qualquer troca de fonte de verdade.
+ * Um segundo é mais que qualquer rajada de rede e muito menos que qualquer troca
+ * de fonte de verdade.
+ *
+ * Mas este número NÃO é o que impede o congelamento, e já pareceu que era. O
+ * maior adiantamento que a fila aguenta é FILA_MAX quadros — uns 400 ms a
+ * 30 fps, 200 ms a 60 —, e entre isso e os 1080 ms deste teste havia uma zona
+ * morta: quadro adiantado 600 ms não era "salto", então ninguém reancorava, e
+ * também nunca chegava a vez dele, porque a fila estourava antes e o jogava
+ * fora. Medido numa transmissão real: 78 s de tela parada, com `passo()`
+ * rodando a 60 por segundo e sem desenhar nada. Baixar este número para caber
+ * na fila não resolve, porque o tamanho da fila em tempo depende do fps — e o
+ * fps de câmera varia sozinho com a luz. Quem fecha a zona morta é o estouro
+ * da fila, em draw(): ver "nada venceu". Este teste fica só para o que ele
+ * sabe dizer e o outro não — que o relógio da origem é outro, e o piso junto.
  */
 const SALTO_MS = 1000;
 
@@ -100,6 +111,26 @@ const AJUSTE_MS = 2000;
 
 /** Correção máxima por ajuste: acima disso a mudança de ritmo se vê. */
 const PASSO_MAX_MS = 15;
+
+/**
+ * Sobra de folga a partir da qual o ajuste corrige tudo de uma vez.
+ *
+ * PASSO_MAX_MS é para desvio de relógio, que é lento: 7,5 ms por segundo
+ * alcança qualquer desvio real sem ninguém ver a mudança de ritmo. Mas há uma
+ * sobra que não é desvio nenhum, e é a mais comum de todas: a rede engasga, o
+ * primeiro quadro atrasado reancora a referência (o lado negativo de draw()),
+ * e a rajada que vem atrás dele chega toda adiantada — pelo tamanho inteiro do
+ * engasgo, e para sempre, porque a referência foi feita em cima do quadro mais
+ * atrasado de todos. Um engasgo de 600 ms virava 600 ms a mais de espera em
+ * cada quadro, e a 7,5 ms/s isso levava 80 s para sair.
+ *
+ * Se nem o quadro mais apertado de uma janela inteira de AJUSTE_MS chegou perto
+ * da espera combinada, a sobra é atraso puro. Cortá-la de uma vez custa um
+ * pulo na imagem, uma vez só — o mesmo preço de qualquer reancoragem. Cem
+ * milissegundos ficam acima do que o ajuste fino corrige em poucas janelas e
+ * abaixo de qualquer atraso que alguém perceba conversando.
+ */
+const SOBRA_MAX_MS = 100;
 
 /**
  * Atraso a partir do qual não vale mais a pena continuar de onde se está.
@@ -428,9 +459,36 @@ export function createPlayer(canvas, { onError, onTamanho, onAtrasado, onDesenho
 
     medir(agora, folga);
 
-    fila.push({ frame, tsMs, exibirEm });
+    // `base + tsMs` de novo, e não o `exibirEm` de cima: medir() pode ter
+    // acabado de mover a referência, e este quadro ficaria marcado pela régua
+    // velha, atrás dos que a fila já corrigiu.
+    fila.push({ frame, tsMs, exibirEm: base + tsMs });
 
-    // Fila estourada: o mais velho é o que menos importa, e segurá-lo é atraso.
+    // Fila estourada e nada venceu: o adiantamento é maior do que a fila
+    // consegue segurar. Descartar o mais velho aqui, como no caso de baixo,
+    // seria descartar o próximo a ter a vez, e a cada quadro que chega: nenhum
+    // chega a ser desenhado, e a tela congela até o ajuste fino alcançar — ver
+    // a zona morta descrita em SALTO_MS.
+    //
+    // O teste é "o mais velho ainda não venceu", e não uma conta de folga
+    // contra um limite em milissegundos, de propósito: quanto tempo cabem
+    // FILA_MAX quadros depende do fps, e o fps de câmera muda sozinho com a
+    // luz do quarto. Este é o fato que a conta tentaria prever, medido direto.
+    //
+    // O piso fica: adiantamento dentro da mesma régua não muda o desvio de
+    // relógio entre as duas máquinas, igual ao lado atrasado.
+    if (fila.length > FILA_MAX && fila[0].exibirEm > agora) {
+      ressincronizacoes++;
+      fila.pop();
+      esvaziar();
+      reancorar(agora, tsMs);
+      pintar(frame);
+      return;
+    }
+
+    // Fila estourada com quadros vencidos: é quem desenha que não está rodando
+    // (aba escondida congela o requestAnimationFrame). O mais velho é o que
+    // menos importa, e segurá-lo é atraso.
     while (fila.length > FILA_MAX) fila.shift().frame.close();
 
     agendar();
@@ -465,7 +523,10 @@ export function createPlayer(canvas, { onError, onTamanho, onAtrasado, onDesenho
 
     const erro = folgaMin - BUFFER_MS;
     if (folgaMin !== Infinity && Math.abs(erro) > 5) {
-      base -= Math.max(-PASSO_MAX_MS, Math.min(PASSO_MAX_MS, erro));
+      // Só para o lado adiantado: sobra grande é atraso puro, e sai de uma vez
+      // (ver SOBRA_MAX_MS). Falta nunca é corrigida aos saltos — ela já tem o
+      // seu remédio, a reancoragem de quadro atrasado em draw().
+      base -= erro > SOBRA_MAX_MS ? erro : Math.max(-PASSO_MAX_MS, Math.min(PASSO_MAX_MS, erro));
       for (const item of fila) item.exibirEm = base + item.tsMs;
     }
 
