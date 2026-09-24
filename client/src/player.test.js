@@ -23,6 +23,8 @@ const PISO_JANELA_MS = 60_000;
 let agora = 0;
 let pendentes = [];
 let desenhados = [];
+/** Em que instante cada quadro de `desenhados` foi para a tela. */
+let momentos = [];
 /** O ultimo decodificador que o player criou, para o teste mexer na fila dele. */
 let ultimoDecoder = null;
 
@@ -32,7 +34,10 @@ function canvasFalso() {
     width: 0,
     height: 0,
     getContext: () => ({
-      drawImage: (frame) => desenhados.push(frame.timestamp / 1000),
+      drawImage: (frame) => {
+        desenhados.push(frame.timestamp / 1000);
+        momentos.push(agora);
+      },
       fillRect: () => {},
       set fillStyle(_) {},
     }),
@@ -66,6 +71,7 @@ beforeEach(() => {
   agora = 1000;
   pendentes = [];
   desenhados = [];
+  momentos = [];
   ultimoDecoder = null;
 
   vi.spyOn(performance, 'now').mockImplementation(() => agora);
@@ -545,5 +551,139 @@ describe('pulo para o vivo', () => {
 
     Date.now = real;
     expect(onAtrasado).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
+ * A zona morta entre o teto da fila e o salto de relógio.
+ *
+ * Quadro adiantado demais para caber na fila, e de menos para contar como
+ * salto (SALTO_MS), não era reancorado nem desenhado: a fila estourava antes de
+ * chegar a vez dele, a cada quadro, e a tela ficava parada até o ajuste fino
+ * alcançar — 78 s numa transmissão real, bem depois de o vigia de main.js
+ * (15 s) acusar "a imagem parou de chegar".
+ *
+ * O adiantamento nasce de um engasgo: o primeiro quadro atrasado reancora a
+ * referência, e a rajada que vem atrás dele chega adiantada pelo engasgo
+ * inteiro. Os testes reproduzem exatamente isso, em vez de forçar o número.
+ */
+describe('adiantamento maior que a fila', () => {
+  /**
+   * Entrega cada quadro na hora de chegada dele, como TCP entrega: em ordem,
+   * nunca antes do anterior. Devolve o maior intervalo sem desenho, em ms.
+   */
+  function transmitir(p, capturas, chegadas) {
+    capturas.forEach((ts, i) => {
+      avancar(Math.max(0, chegadas[i] - agora), 4);
+      p.push(pacote(i === 0 ? KEYFRAME : DELTA, ts));
+    });
+    avancar(2000, 4);
+    return maiorBuraco();
+  }
+
+  function maiorBuraco() {
+    let maior = 0;
+    for (let i = 1; i < momentos.length; i++)
+      maior = Math.max(maior, momentos[i] - momentos[i - 1]);
+    return maior;
+  }
+
+  /** Gerador pseudoaleatório fixo: o teste precisa falhar sempre igual. */
+  function sorteio(semente) {
+    let s = semente;
+    return () => {
+      s = (s * 1664525 + 1013904223) % 4294967296;
+      return s / 4294967296;
+    };
+  }
+
+  it('uma origem 600 ms adiantada continua desenhando', () => {
+    const p = player();
+    const capturas = [];
+    const chegadas = [];
+
+    // Dez segundos a 30 fps. No segundo 2, a rede segura 600 ms e solta tudo
+    // de uma vez; depois disso volta ao normal — só que cada quadro chega
+    // 600 ms antes da hora que a referência nova marcou para ele.
+    for (let i = 0; i < 300; i++) {
+      const ts = i * 33.33;
+      capturas.push(ts);
+      chegadas.push(1000 + (ts >= 2000 && ts < 2600 ? 2600 : ts));
+    }
+
+    const buraco = transmitir(p, capturas, chegadas);
+
+    // O engasgo de 600 ms aparece na tela, é claro — o que não pode é ficar.
+    expect(buraco).toBeLessThan(1000);
+    // E volta ao lugar: o último quadro aparece a uma espera do vivo, e não a
+    // 600 ms dele.
+    expect(momentos.at(-1) - chegadas.at(-1)).toBeLessThanOrEqual(BUFFER_MS + 16);
+  });
+
+  it('a fila cheia sem nada vencido reancora, em vez de largar o próximo da vez', () => {
+    const p = player();
+    p.push(pacote(KEYFRAME, 0));
+    avancar(BUFFER_MS + 16);
+
+    // A referência foi feita em cima de um quadro atrasado: todos os seguintes
+    // chegam 600 ms antes da hora marcada para eles.
+    for (let i = 1; i < 40; i++) {
+      p.push(pacote(DELTA, 600 + i * 33.33));
+      avancar(33.33, 4);
+    }
+
+    expect(p.getSaude().resync).toBeGreaterThan(0);
+    expect(desenhados.length).toBeGreaterThan(20);
+  });
+
+  it('câmera com pouca luz, entre 8 e 15 fps e com tremor, nunca fica 15 s sem quadro', () => {
+    const p = player();
+    const aleatorio = sorteio(42);
+    const capturas = [];
+    const chegadas = [];
+
+    // Cinco minutos de uma webcam que baixa a taxa sozinha: cada intervalo de
+    // captura entre 66 e 125 ms, e a rede somando até 60 ms de tremor. A cada
+    // vinte segundos, um engasgo de até 900 ms — é ele que cria o adiantamento.
+    let ts = 0;
+    let chegada = 1000;
+    let proximoEngasgo = 20_000;
+    while (ts < 300_000) {
+      capturas.push(ts);
+      let ideal = 1000 + ts + aleatorio() * 60;
+      if (ts >= proximoEngasgo) {
+        ideal += 300 + aleatorio() * 600;
+        proximoEngasgo += 20_000;
+      }
+      chegada = Math.max(chegada, ideal);
+      chegadas.push(chegada);
+      ts += 66 + aleatorio() * 59;
+    }
+
+    const buraco = transmitir(p, capturas, chegadas);
+
+    expect(buraco).toBeLessThan(15_000);
+    // O pior buraco honesto é um engasgo mais um intervalo de captura.
+    expect(buraco).toBeLessThan(1200);
+    // E quase tudo o que foi capturado chegou à tela.
+    expect(desenhados.length).toBeGreaterThan(capturas.length * 0.9);
+  });
+
+  it('o adiantamento que sobra de um engasgo sai em uma janela, e não em um minuto', () => {
+    const p = player();
+    const capturas = [];
+    const chegadas = [];
+
+    // Engasgo de 300 ms: cabe na fila, então não congela — mas deixava 300 ms
+    // a mais de atraso em cada quadro, saindo a 7,5 ms por segundo.
+    for (let i = 0; i < 300; i++) {
+      const ts = i * 33.33;
+      capturas.push(ts);
+      chegadas.push(1000 + (ts >= 2000 && ts < 2300 ? 2300 : ts));
+    }
+
+    transmitir(p, capturas, chegadas);
+
+    expect(momentos.at(-1) - chegadas.at(-1)).toBeLessThanOrEqual(BUFFER_MS + 16);
   });
 });
