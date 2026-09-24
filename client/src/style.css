@@ -125,6 +125,64 @@ body {
   border-radius: 0;
 }
 
+/* Duas telas no palco. A caixa de fora ocupa a célula do palco e é medida
+   (`container-type: size`); a de dentro divide essa área em duas. Lado a lado é
+   o padrão, e quando o palco fica mais alto do que largo — a atividade do
+   Discord aberta numa faixa estreita, o celular em pé — as duas vão uma em
+   cima da outra: lado a lado ali, cada uma ficaria com um terço da altura. */
+.palco-duplo {
+  min-width: 0;
+  min-height: 0;
+  container-type: size;
+}
+
+.palco-paineis {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: minmax(0, 1fr);
+  gap: 10px;
+  width: 100%;
+  height: 100%;
+}
+
+@container (aspect-ratio < 1) {
+  .palco-paineis {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Cada painel se mede sozinho, para a barra encolher quando ele é estreito —
+   metade de uma janela comum já não comporta a barra inteira. */
+.palco-paineis .tile-palco {
+  container: painel / inline-size;
+}
+
+@container painel (width < 560px) {
+  .tools {
+    top: 6px;
+    gap: 0;
+    padding: 3px;
+  }
+
+  .tool {
+    min-width: 30px;
+    height: 30px;
+    padding: 0 5px;
+  }
+
+  /* O mesmo corte da janela estreita: a cor escolhida continua valendo. */
+  .tool-cores,
+  .tool-sep {
+    display: none;
+  }
+}
+
+/* Em tela cheia as duas encostam uma na outra, como o palco encosta na borda. */
+.grid.palco.cheia .palco-paineis {
+  gap: 2px;
+}
+
 .sidebar {
   display: flex;
   flex-direction: column;
@@ -547,6 +605,52 @@ body {
 
 .tile:hover .tile-stop {
   opacity: 1;
+}
+
+/* Dividir o palco, ou voltar a uma tela só. Mora ao lado do parar e aparece
+   com ele no palco; na lateral fica sempre à vista, porque é ali que a divisão
+   começa e uma miniatura não tem hover que se adivinhe. */
+.tile-lado {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  opacity: 0;
+  transition:
+    opacity 0.15s,
+    background 0.15s;
+}
+
+.tile-lado.com-parar {
+  right: 46px;
+}
+
+.tile:hover .tile-lado,
+.sidebar .tile-lado {
+  opacity: 1;
+}
+
+.tile-lado:hover {
+  background: var(--accent);
+}
+
+.tile-lado svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linejoin: round;
 }
 
 .tile-stop:hover {

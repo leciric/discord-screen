@@ -264,6 +264,37 @@ nem o conteúdo de tela nenhuma.
 
 ---
 
+## Duas telas lado a lado
+
+Com mais de uma transmissão no ar, uma fica em destaque no palco e as outras
+aparecem em miniatura na lateral. Para comparar duas ao mesmo tempo, clique no
+botão de **duas colunas** no canto da miniatura (**"Ver lado a lado"**): ela vai
+para o palco, dividindo o espaço com a que já estava lá. Passando o mouse sobre
+a tela em destaque aparece o mesmo botão — **"Ver lado a lado com …"** —, que
+chama a outra transmissão sem precisar da lateral (numa janela estreita a
+lateral some, e ele continua lá).
+
+- Numa janela larga as duas ficam **lado a lado**; quando o palco é mais alto do
+  que largo (a atividade aberta numa faixa estreita, por exemplo), ficam **uma
+  em cima da outra**. Cada uma mantém a sua proporção e o nome de quem está
+  transmitindo.
+- Cada tela tem a **sua** barra de ferramentas e o **seu** zoom: aproximar uma
+  não mexe na outra. O desenho e o laser vão para a tela onde você está
+  desenhando, e os atalhos de teclado valem para a tela em que o mouse passou
+  por último.
+- A **tela cheia** mostra as duas.
+- Para voltar a uma tela só, use o botão **"Voltar a uma tela só"** no canto da
+  tela que você quer tirar — a outra fica sozinha no palco. Se uma das duas
+  transmissões acabar, o palco volta sozinho para a que sobrou.
+- Uma tela que você ainda não estava assistindo passa a ser assistida quando
+  entra no lado a lado, e **deixa de ser** quando sai: ela volta à lateral como
+  convite, sem gastar a sua internet. As que você já assistia continuam na
+  lateral como estavam.
+
+Nada divide sozinho: o palco só mostra duas telas quando você pede.
+
+---
+
 ## Apontar, desenhar e dar zoom na tela
 
 Quem assiste não fica só olhando. Passando o mouse sobre a tela em destaque
