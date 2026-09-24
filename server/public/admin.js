@@ -2030,6 +2030,7 @@ $('ajustesPadrao').addEventListener('click', () => {
   // e o servidor devolve o valor real depois de aplicar. Aqui só se propõe.
   const padroes = {
     atrasoRelayMs: 500,
+    atrasoEntregaMs: 1500,
     bufferMaxBytes: 2 * 1024 * 1024,
     tetoMinBytes: 64 * 1024,
     keyframeIntervaloMs: 1000,

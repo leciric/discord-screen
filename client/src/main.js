@@ -1,6 +1,15 @@
 import { DiscordSDK } from '@discord/embedded-app-sdk';
 import { createPlayer } from './player.js';
 import { createAudio } from './audio.js';
+import {
+  acertarPalco,
+  aLargar,
+  dividido,
+  porDoLado,
+  promover,
+  telasNoPalco,
+  tirarDoPalco,
+} from './palco.js';
 import { createBroadcaster } from '../../shared/broadcaster.js';
 import { criarCamada, conter, paraGrade, CORES, ESPESSURAS } from '../../shared/anotacoes.js';
 import { criarFlutuante, flutuarDisponivel } from '../../shared/flutuar.js';
@@ -104,6 +113,20 @@ let volumeAntes = volume || 1;
 // de quem assiste precisa sobreviver a isso.
 let activeSlot = null;
 let telaCheia = false;
+// A segunda tela do palco, quando quem assiste pediu duas lado a lado. Null é
+// o palco de uma tela só, que é o normal: dividir é sempre pedido, nunca
+// automático — duas telas pela metade não são melhores do que uma inteira até
+// alguém dizer que quer comparar as duas. As regras moram em palco.js.
+let ladoSlot = null;
+// As telas que só começaram a ser assistidas para ocupar o lado do palco. Ao
+// sair do palco elas voltam a ser convite, como eram — ver `aLargar`.
+const emprestadas = new Set();
+// A tela do palco que a pessoa está usando agora: a última em que o ponteiro
+// entrou. É quem recebe os atalhos de teclado quando há duas.
+let focoSlot = null;
+
+const palcoAtual = () => ({ ativo: activeSlot, lado: ladoSlot });
+const estaNoPalco = (slot) => slot !== null && (slot === activeSlot || slot === ladoSlot);
 
 /**
  * Ferramenta do ponteiro sobre a tela em destaque.
@@ -270,11 +293,65 @@ function watchSlot(slot) {
 
 function unwatchSlot(slot) {
   dispensados.add(slot);
+  emprestadas.delete(slot);
   watching.delete(slot);
   ws?.send(JSON.stringify({ type: 'unwatch', slot }));
   closeStream(slot);
   renderGrid();
   renderBar();
+}
+
+/**
+ * Troca quem está no palco e larga o que só estava sendo assistido para ele.
+ *
+ * Não redesenha: quem chama pode estar dentro do renderGrid, e é ele quem sabe
+ * a hora. Devolve se alguma tela foi largada, porque aí a barra de baixo também
+ * muda — o controle de som some junto com o último áudio.
+ */
+function mudarPalco(novo) {
+  activeSlot = novo.ativo;
+  ladoSlot = novo.lado;
+
+  const largar = aLargar(novo, emprestadas);
+  // Emprestada só enquanto o palco está dividido. Com uma tela só, a que ficou
+  // é simplesmente a que se está vendo, e trocar de destaque depois não pode
+  // derrubá-la como se ainda fosse de passagem.
+  if (!dividido(novo)) emprestadas.clear();
+  for (const slot of largar) {
+    emprestadas.delete(slot);
+    watching.delete(slot);
+    ws?.send(JSON.stringify({ type: 'unwatch', slot }));
+    closeStream(slot);
+  }
+  return largar.length > 0;
+}
+
+/**
+ * Põe esta tela ao lado da que está em destaque.
+ *
+ * Quem pede duas telas ao mesmo tempo pediu para ver as duas, então a do lado
+ * passa a ser assistida se ainda não era — e fica marcada como emprestada, para
+ * voltar a ser convite quando sair do palco.
+ */
+function verLadoALado(slot) {
+  if (!available.has(slot)) return;
+  const largou = mudarPalco(porDoLado(palcoAtual(), slot));
+  if (!dividido(palcoAtual())) return;
+
+  if (!streams.has(slot) && !watching.has(slot)) {
+    emprestadas.add(slot);
+    watchSlot(slot);
+  } else {
+    renderGrid();
+  }
+  if (largou) renderBar();
+}
+
+/** Tira esta tela do palco dividido; a outra fica sozinha no destaque. */
+function tirarDoLado(slot) {
+  const largou = mudarPalco(tirarDoPalco(palcoAtual(), slot));
+  renderGrid();
+  if (largou) renderBar();
 }
 
 /**
@@ -400,7 +477,7 @@ function renderGrid() {
 
   // A barra é refeita a cada render, junto do tile do palco. Zerar aqui evita
   // que a referência sobreviva ao tile que a continha — sem palco não há barra.
-  barra = null;
+  barras = [];
   alvoQuadroAtual = null;
   $('boardBox').querySelector('.tools')?.remove();
 
@@ -435,7 +512,7 @@ function renderGrid() {
     $('people').hidden = false;
     $('app').classList.remove('cheia', 'palco');
     $('app').classList.add('flutua');
-    if (!barra || barra.alvo !== alvoQuadroAtual) {
+    if (!barras.some((b) => b.alvo === alvoQuadroAtual)) {
       alvoQuadroAtual = alvoDoQuadro();
       $('boardBox').append(buildFerramentas(alvoQuadroAtual));
     }
@@ -448,14 +525,21 @@ function renderGrid() {
 
   const casters = participants.filter((p) => p.broadcasting);
 
-  if (!casters.length) {
-    activeSlot = null;
-    telaCheia = false;
-  } else if (activeSlot === null || !available.has(activeSlot)) {
-    // Sempre há uma tela em destaque quando existe transmissão: chegar numa
-    // sala com tela no ar e ver só avatares esconderia o que importa.
-    activeSlot = entradasDoGrid().find((e) => e.slot !== null)?.slot ?? null;
-  }
+  if (!casters.length) telaCheia = false;
+  // Sempre há uma tela em destaque quando existe transmissão: chegar numa sala
+  // com tela no ar e ver só avatares esconderia o que importa. E a do lado que
+  // acabou leva o palco de volta a uma tela só — ver acertarPalco.
+  const noAr = casters.length
+    ? [
+        ...new Set([
+          ...entradasDoGrid()
+            .map((e) => e.slot)
+            .filter((slot) => slot !== null),
+          ...available.keys(),
+        ]),
+      ]
+    : [];
+  mudarPalco(acertarPalco(palcoAtual(), noAr));
 
   // Quem chegou pelo link da atividade já pediu para assistir lá atrás: parar
   // num convite de "Assistir tela" seria cobrar o mesmo clique duas vezes.
@@ -482,12 +566,20 @@ function renderGrid() {
     // Zerado antes de qualquer coisa: watchSlot renderiza de novo, e a segunda
     // passada não pode reabrir este mesmo caminho.
     const cheia = chegada.cheia;
+    const lado = chegada.lado ?? null;
     chegada = null;
 
-    activeSlot = alvo;
+    mudarPalco(promover(palcoAtual(), alvo));
     telaCheia = cheia;
     // Adiado porque watchSlot chama renderGrid, e estamos dentro de um.
     if (!watching.has(alvo)) queueMicrotask(() => watchSlot(alvo));
+
+    // O link também leva a segunda tela, quando quem o abriu estava vendo duas.
+    // Ela foi pedida junto, então não é emprestada: é o que a pessoa veio ver.
+    if (lado !== null && lado !== alvo && available.has(lado)) {
+      mudarPalco(porDoLado(palcoAtual(), lado));
+      if (!watching.has(lado)) queueMicrotask(() => watchSlot(lado));
+    }
   }
 
   autoAssistir();
@@ -541,16 +633,26 @@ function renderGrid() {
     return;
   }
 
-  const dono = available.get(activeSlot)?.userId;
-  const emCena = participants.find((p) => p.id === dono) ?? {
-    id: dono ?? 'desconhecido',
-    name: 'Transmitindo',
-    broadcasting: true,
-  };
   // O slot em destaque, e não o da pessoa: cada transmissão tem um nó de canvas
   // só, então montar o palco com o slot errado o arranca do tile que o estava
   // mostrando — e um dos dois fica preto, conforme a ordem do desenho.
-  grid.append(buildTile(emCena, { palco: true, slot: activeSlot }).el);
+  const tileDoPalco = (slot) => buildTile(donoDe(slot), { palco: true, slot }).el;
+
+  if (ladoSlot === null) {
+    grid.append(tileDoPalco(activeSlot));
+  } else {
+    // Duas telas dividindo a área do palco, cada uma com o seu canvas — que é
+    // único, e por isso as duas nunca aparecem também na lateral. A caixa de
+    // fora é quem mede a área: é ela que decide, pelo CSS, se as duas ficam
+    // lado a lado ou uma em cima da outra.
+    const duplo = document.createElement('div');
+    duplo.className = 'palco-duplo';
+    const paineis = document.createElement('div');
+    paineis.className = 'palco-paineis';
+    paineis.append(...telasNoPalco(palcoAtual()).map(tileDoPalco));
+    duplo.append(paineis);
+    grid.append(duplo);
+  }
 
   if (telaCheia) {
     sincronizarZoom();
@@ -560,6 +662,18 @@ function renderGrid() {
   applyStrip();
   grid.append(divider, buildSidebar());
   sincronizarZoom();
+}
+
+/** Quem está transmitindo nesta tela, mesmo antes de o nome chegar. */
+function donoDe(slot) {
+  const dono = available.get(slot)?.userId;
+  return (
+    participants.find((p) => p.id === dono) ?? {
+      id: dono ?? 'desconhecido',
+      name: 'Transmitindo',
+      broadcasting: true,
+    }
+  );
 }
 
 /**
@@ -585,7 +699,7 @@ function buildSidebar() {
 
   // Por transmissão, e não por pessoa: quem divide tela e câmera tem duas
   // miniaturas aqui, e a que está no palco é a única que não se repete.
-  const outras = entradasDoGrid().filter((e) => e.slot !== null && e.slot !== activeSlot);
+  const outras = entradasDoGrid().filter((e) => e.slot !== null && !estaNoPalco(e.slot));
   if (outras.length) {
     barra.append(secaoTitulo(outras.length === 1 ? 'Outra transmissão' : 'Outras transmissões'));
     for (const e of outras) barra.append(buildTile(e.p, { slot: e.slot }).el);
@@ -674,9 +788,14 @@ function buildTile(p, { palco = false, semVideo = false, slot: slotDado = null }
     // entrega aqui. Sem esta guarda, cada traço alternava a tela cheia.
     if (performance.now() < cliqueBloqueadoAte) return;
     if (palco) telaCheia = !telaCheia;
-    else activeSlot = slot;
+    else mudarPalco(promover(palcoAtual(), slot));
     renderGrid();
   };
+
+  // Dividir e voltar a uma tela só. Vale também para o convite: pôr do lado uma
+  // tela que ainda não se assiste é pedir para assisti-la.
+  const lado = slot !== null ? buildBotaoLado(slot, palco) : null;
+  if (lado) tile.append(lado);
 
   if (stream) {
     tile.append(noDe(stream));
@@ -821,6 +940,9 @@ function repedirImagem(slot) {
   // pedido barato: o servidor limpa o que travava o relay para este slot e
   // pede o próximo keyframe pelo caminho normal, sem mexer no peer.
   ws?.send(JSON.stringify({ type: 'keyframe', slot }));
+  // E a conexão direta, se ela tiver ficado para trás: é a outra metade do que
+  // parar e voltar a assistir consertava.
+  pedirRtcDeNovo(slot);
 
   s.started = false;
   // `configKey` sai junto: sem isso o `startStream` acha que já está com esta
@@ -903,6 +1025,55 @@ function buildWatchPrompt(slot, name, isMe) {
 
   wrap.append(btn, who);
   return wrap;
+}
+
+/**
+ * O botão de dividir o palco, ou de voltar a uma tela só.
+ *
+ * Três lugares, três ações. Na lateral, a miniatura vai para o lado da tela em
+ * destaque. No palco de uma tela só, a divisão chama a próxima transmissão —
+ * com duas no ar é a outra, e fica a um clique mesmo quando a lateral sumiu
+ * numa janela estreita. No palco dividido, cada tela tem o seu botão de sair,
+ * e a que fica é a outra: quem escolhe qual das duas continua é quem clica.
+ */
+function buildBotaoLado(slot, palco) {
+  if (activeSlot === null) return null;
+
+  let acao;
+  let rotulo;
+  let icone;
+  if (palco && ladoSlot !== null) {
+    acao = () => tirarDoLado(slot);
+    rotulo = 'Voltar a uma tela só';
+    icone = ICONES.umaTela;
+  } else if (palco) {
+    const outra = entradasDoGrid().find((e) => e.slot !== null && e.slot !== slot);
+    if (!outra) return null;
+    acao = () => verLadoALado(outra.slot);
+    rotulo = `Ver lado a lado com ${outra.p.name}`;
+    icone = ICONES.ladoALado;
+  } else {
+    acao = () => verLadoALado(slot);
+    rotulo = ladoSlot === null ? 'Ver lado a lado' : 'Pôr no lugar da tela do lado';
+    icone = ICONES.ladoALado;
+  }
+
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'tile-lado';
+  // O botão de parar ocupa o canto quando existe; sem ele, este vai para lá.
+  const stream = streams.get(slot);
+  if (stream && !stream.local) b.classList.add('com-parar');
+  b.dataset.tip = rotulo;
+  b.setAttribute('aria-label', rotulo);
+  b.innerHTML = icone;
+  b.addEventListener('click', (e) => {
+    // O tile inteiro é clicável: sem isto, o mesmo clique também promoveria a
+    // miniatura ou alternaria a tela cheia.
+    e.stopPropagation();
+    acao();
+  });
+  return b;
 }
 
 // -------------------------------------------------------------------- perfil
@@ -1202,13 +1373,14 @@ function vistaDe(slot) {
 }
 
 /**
- * O zoom vale só no palco.
+ * O zoom vale só no palco — em cada uma das telas dele, quando são duas: cada
+ * painel guarda a sua aproximação, e ampliar um não mexe no outro.
  *
  * A mesma transmissão aparece em miniatura na lateral, e ampliar ali cortaria a
  * miniatura sem que ninguém tivesse pedido. O valor fica guardado: quem volta a
  * pôr aquela tela em destaque encontra a aproximação onde deixou.
  */
-const zoomDe = (slot, s) => (slot === activeSlot ? s.zoom : { z: 1, tx: 0, ty: 0 });
+const zoomDe = (slot, s) => (estaNoPalco(slot) ? s.zoom : { z: 1, tx: 0, ty: 0 });
 
 /** Ponto do evento na grade normalizada do vídeo, ou null fora dele. */
 function pontoDe(slot, e) {
@@ -1245,10 +1417,10 @@ function aplicarZoom(slot) {
 
   const { z, tx, ty } = zoomDe(slot, s);
   aplicarTransformacao(s, z === 1 && !tx && !ty ? '' : `translate(${tx}px, ${ty}px) scale(${z})`);
-  s.surface.classList.toggle('ampliado', slot === activeSlot && s.zoom.z > 1);
+  s.surface.classList.toggle('ampliado', estaNoPalco(slot) && s.zoom.z > 1);
   s.ann.repintar();
 
-  if (slot === activeSlot) mostrarZoom();
+  if (estaNoPalco(slot)) mostrarZoom();
 }
 
 /** O zoom vale para os dois elementos: trocar de transporte não pode desfazê-lo. */
@@ -1263,7 +1435,7 @@ function aplicarTransformacao(s, valor) {
  */
 function definirZoom(slot, alvo, cx, cy) {
   const s = streams.get(slot);
-  if (!s || slot !== activeSlot) return;
+  if (!s || !estaNoPalco(slot)) return;
 
   const box = s.surface.getBoundingClientRect();
   const { w: vw, h: vh } = medidaDe(s);
@@ -1442,11 +1614,17 @@ function sincronizarAnn(slot, tracos) {
 }
 
 /** Quem apaga o desenho dos outros: o dono da tela e quem criou a sala. */
-function podeLimparTudo() {
+function podeLimparTudo(slot = activeSlot) {
   const eu = session?.user?.id;
-  if (!eu || activeSlot === null) return false;
-  return available.get(activeSlot)?.userId === eu || lastRoomState?.ownerId === eu;
+  if (!eu || slot === null) return false;
+  return available.get(slot)?.userId === eu || lastRoomState?.ownerId === eu;
 }
+
+/**
+ * A tela do palco que recebe os atalhos: a que está sob a mão, ou a do
+ * destaque. Com uma tela só as duas respostas são a mesma.
+ */
+const telaEmFoco = () => (estaNoPalco(focoSlot) ? focoSlot : activeSlot);
 
 function definirFerramenta(f) {
   if (ferramenta === f) return;
@@ -1464,7 +1642,7 @@ function definirFerramenta(f) {
   // dos outros até o tempo de vida do laser acabar.
   if (ferramenta === 'laser') {
     if (noQuadro) emitirQuadro({ k: 'po' });
-    else if (activeSlot !== null) emitir(activeSlot, { k: 'po' });
+    else for (const slot of telasNoPalco(palcoAtual())) emitir(slot, { k: 'po' });
   }
 
   ferramenta = f;
@@ -1861,7 +2039,7 @@ function ligarInteracaoQuadro() {
  */
 function ligarInteracao(slot, s) {
   const sup = s.surface;
-  const noPalco = () => slot === activeSlot;
+  const noPalco = () => estaNoPalco(slot);
 
   // Um por ponteiro: é o que permite reconhecer a pinça de dois dedos.
   const pontos = new Map();
@@ -1871,6 +2049,11 @@ function ligarInteracao(slot, s) {
   let laserEm = 0;
 
   sup.dataset.f = ferramenta;
+
+  // Com duas telas no palco, os atalhos vão para a que está sob o ponteiro.
+  sup.addEventListener('pointerenter', () => {
+    if (noPalco()) focoSlot = slot;
+  });
 
   sup.addEventListener(
     'wheel',
@@ -1889,6 +2072,7 @@ function ligarInteracao(slot, s) {
 
   sup.addEventListener('pointerdown', (e) => {
     if (!noPalco()) return;
+    focoSlot = slot;
 
     pontos.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pontos.size === 2) return iniciarPinca();
@@ -2085,7 +2269,11 @@ const distancia = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
  * está ali, e um controle a uma tela de distância do que ele altera é um
  * controle que ninguém acha.
  */
-let barra = null;
+//
+// Uma por tela do palco: com duas lado a lado cada painel tem a sua, porque o
+// zoom, a janela flutuante e quem pode limpar são de cada tela. Ferramenta, cor
+// e espessura são da pessoa, e as duas barras mostram a mesma escolha.
+let barras = [];
 // O alvo do quadro vivo neste render. Guardado para o renderGrid saber que a
 // barra que está no DOM é a dele, e não a de um palco que acabou de sair.
 let alvoQuadroAtual = null;
@@ -2106,7 +2294,7 @@ const alvoDoPalco = (slot) => ({
   zerarZoom: () => zerarZoom(slot),
   flutuar: () => alternarFlutuante(slot),
   flutuando: () => Boolean(streams.get(slot)?.flutuante),
-  podeLimparTudo,
+  podeLimparTudo: () => podeLimparTudo(slot),
 });
 
 function buildFerramentas(alvo) {
@@ -2216,7 +2404,7 @@ function buildFerramentas(alvo) {
 
   el.append(menos, nivel, mais);
 
-  barra = { el, botoes, cores, swatches, grossuras, nivel, alvo };
+  barras.push({ el, botoes, cores, swatches, grossuras, nivel, alvo });
   sincronizarBarra();
   return el;
 }
@@ -2237,8 +2425,10 @@ function separador() {
  * num nó ainda solto é inofensivo; não escrever é o bug.
  */
 function sincronizarBarra() {
-  if (!barra) return;
+  for (const barra of barras) sincronizarUmaBarra(barra);
+}
 
+function sincronizarUmaBarra(barra) {
   for (const nome of ['mover', 'laser', 'caneta']) {
     barra.botoes[nome].classList.toggle('ativo', ferramenta === nome);
   }
@@ -2270,15 +2460,14 @@ function sincronizarBarra() {
     barra.botoes.flutuar.dataset.tip = rotulo;
     barra.botoes.flutuar.setAttribute('aria-label', rotulo);
   }
-  mostrarZoom();
+  mostrarZoomEm(barra);
 }
 
 /**
  * A barra some quase toda quando não está em uso — a tela é o que importa —, e
  * fica firme enquanto houver ferramenta escolhida ou aproximação aplicada.
  */
-function firmarBarra() {
-  if (!barra) return;
+function firmarBarra(barra) {
   barra.el.classList.toggle(
     'fixa',
     ferramenta !== 'mover' || barra.alvo.zoomAtual() > 1 || esconderTracos,
@@ -2286,14 +2475,22 @@ function firmarBarra() {
 }
 
 function mostrarZoom() {
-  if (!barra) return;
+  for (const barra of barras) mostrarZoomEm(barra);
+}
+
+function mostrarZoomEm(barra) {
   const z = barra.alvo.zoomAtual();
   barra.nivel.textContent = `${Math.round(z * 100)}%`;
   barra.nivel.classList.toggle('ativo', z > 1);
-  firmarBarra();
+  firmarBarra(barra);
 }
 
 const ICONES = {
+  ladoALado:
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="5" width="8" height="14" rx="1.5"/>' +
+    '<rect x="13.5" y="5" width="8" height="14" rx="1.5"/></svg>',
+  umaTela:
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="1.5"/></svg>',
   mover:
     '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 3.2 11 19.5l2.1-6.4 6.4-2.1z"/></svg>',
   laser:
@@ -2356,6 +2553,10 @@ function openStream(slot, userId) {
       s.started = true;
       renderGrid();
     },
+    // O aviso de travado saiu de cena: a imagem está sendo desenhada de novo.
+    onDesenho: () => {
+      if (s.travado) voltouAImagem(slot);
+    },
     // Ficou longe demais do vivo. O player já largou a fila e esqueceu a
     // referência de tempo; o que falta é o que só daqui se alcança — pedir a
     // imagem de novo, que é o que traz o keyframe para recomeçar.
@@ -2412,6 +2613,10 @@ function montarSuperficie(slot, userId, canvas, video) {
     // e não o estado do RTCPeerConnection, que decide o que vai para a tela.
     viaRtc: false,
     prazoRtc: null,
+    // Nova tentativa da conexão direta depois de ela cair, e o prazo da
+    // próxima. Ver agendarReconvite.
+    reconvite: null,
+    reconviteMs: null,
     // Prévia da própria captura, e não algo que veio pela rede.
     local: false,
     // Vira true no primeiro quadro desenhado. Até lá o tile mostra "Conectando…"
@@ -2526,6 +2731,7 @@ function closeStream(slot) {
   if (!s) return;
   s.player?.stop();
   s.audio?.stop();
+  clearTimeout(s.reconvite);
   fecharPeer(s);
   s.flutuante?.parar();
   s.ann.parar();
@@ -2537,8 +2743,11 @@ function closeStream(slot) {
   // A marca é por tela: deixá-la para trás faria a próxima transmissão neste
   // slot ser comparada com o contador da anterior e nascer "travada".
   marcaDeQuadros.delete(slot);
-  // Quem estava no palco saiu: renderGrid escolhe a próxima na próxima passada.
-  if (activeSlot === slot) activeSlot = null;
+  // Quem estava no palco saiu. Com duas telas, a outra fica sozinha no
+  // destaque; com uma, renderGrid escolhe a próxima na próxima passada.
+  emprestadas.delete(slot);
+  ({ ativo: activeSlot, lado: ladoSlot } = tirarDoPalco(palcoAtual(), slot));
+  if (ladoSlot === null) emprestadas.clear();
 }
 
 function endStream(slot) {
@@ -2647,6 +2856,8 @@ function assumirRtc(slot) {
   s.viaRtc = true;
   clearTimeout(s.prazoRtc);
   s.prazoRtc = null;
+  clearTimeout(s.reconvite);
+  s.reconviteMs = null;
 
   // O som passa a sair do <video>; manter o decodificador de áudio tocando
   // junto daria eco com meio segundo de diferença entre os dois caminhos.
@@ -2690,6 +2901,42 @@ function desistirDoRtc(slot) {
   }
 
   if (watching.has(slot)) ws?.send(JSON.stringify({ type: 'rtc-ativo', slot, on: false }));
+  // Também quando a nova tentativa não chegou a assumir (`reconviteMs` já
+  // armado): sem isso a primeira tentativa frustrada seria a última. A conexão
+  // que nunca fechou desde o começo não entra aqui — nela a rede já disse não.
+  if (estava || s.reconviteMs) agendarReconvite(slot);
+}
+
+/**
+ * Tenta a conexão direta de novo, algum tempo depois de ela cair.
+ *
+ * Antes, cair para o relay era para sempre: o convite só saía num `watch`
+ * novo, e quem assistia ficava no caminho mais lento — e mais atrasado — até
+ * parar de assistir e assistir de novo, que foi o conserto que as pessoas
+ * descobriram sozinhas. Aqui o programa faz isso por elas, sem soltar a tela.
+ *
+ * O prazo dobra a cada queda seguida, porque uma rede que não sustenta a
+ * conexão direta não vai passar a sustentar porque se insistiu; e volta ao
+ * começo quando ela assume de novo (ver `assumirRtc`).
+ */
+const RECONVITE_BASE_MS = 15_000;
+const RECONVITE_MAX_MS = 5 * 60_000;
+
+function agendarReconvite(slot) {
+  const s = streams.get(slot);
+  if (!s || s.local || !suportaWebRTC()) return;
+
+  clearTimeout(s.reconvite);
+  const ms = s.reconviteMs ?? RECONVITE_BASE_MS;
+  s.reconviteMs = Math.min(RECONVITE_MAX_MS, ms * 2);
+  s.reconvite = setTimeout(() => pedirRtcDeNovo(slot), ms);
+}
+
+function pedirRtcDeNovo(slot) {
+  const s = streams.get(slot);
+  if (!s || s.local || s.viaRtc || s.pc || !watching.has(slot) || !suportaWebRTC()) return;
+  if (ws?.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type: 'rtc-de-novo', slot }));
 }
 
 function fecharPeer(s) {
@@ -2828,11 +3075,59 @@ let vigiaTimer = null;
 /** Quantos quadros cada tela já tinha na leitura anterior. */
 const marcaDeQuadros = new Map();
 
+/**
+ * A página está pintando? Levantada por um requestAnimationFrame pedido a cada
+ * leitura do vigia, e conferida na leitura seguinte.
+ *
+ * O vigia conta quadros DESENHADOS, e com a janela minimizada, a aba em
+ * segundo plano ou o Discord escondido o navegador para de desenhar — o
+ * requestAnimationFrame do player não roda, e o <video> da conexão direta para
+ * de compor. Os bytes continuam chegando, a transmissão está perfeita, e o
+ * contador parado era lido como travamento: era exatamente o "a imagem parou
+ * de chegar" que aparecia ao voltar para a janela, e a conexão direta
+ * derrubada para o relay por uma tela que só não estava sendo olhada.
+ *
+ * `document.hidden` sozinho não basta: dentro do Discord a janela pode estar
+ * coberta ou minimizada sem que a página fique sabendo. Um quadro de animação
+ * que não rodou em cinco segundos é a prova que vale em qualquer caso.
+ */
+let pedidoDePintura = false;
+
+function conferirPintura() {
+  // O pedido da leitura anterior ainda não rodou: não houve pintura desde lá.
+  if (pedidoDePintura) return false;
+  pedidoDePintura = true;
+  requestAnimationFrame(() => (pedidoDePintura = false));
+  return !document.hidden;
+}
+
+// Voltando a olhar, a contagem recomeça: a leitura de antes de esconder é de
+// um intervalo em que nada podia ser desenhado.
+document.addEventListener('visibilitychange', () => marcaDeQuadros.clear());
+
+/** A imagem voltou a ser desenhada: o aviso sai na hora, sem esperar o vigia. */
+function voltouAImagem(slot) {
+  const s = streams.get(slot);
+  if (!s?.travado) return;
+  s.travado = false;
+  marcaDeQuadros.delete(slot);
+  renderGrid();
+}
+
 function ensureVigia() {
   if (vigiaTimer) return;
   vigiaTimer = setInterval(() => {
     const telas = [];
     let mudou = false;
+
+    // Sem pintura não há o que medir. A contagem é esquecida, e não só
+    // pausada, para a primeira leitura depois da volta não comparar com a de
+    // antes de sumir. Nem o boletim sai: ele diria "travado" ao servidor pelo
+    // mesmo motivo errado.
+    if (!conferirPintura()) {
+      marcaDeQuadros.clear();
+      return;
+    }
 
     for (const [slot, s] of streams) {
       // A prévia da própria captura não veio pela rede: não há travamento
@@ -3062,10 +3357,15 @@ async function abrirPeloIngresso(ingresso) {
   // O ingresso, sozinho, já diz o que a pessoa veio fazer: assistir. O slot
   // refina qual tela, e a tela cheia é o padrão de quem veio da atividade —
   // links antigos, sem esses dois, continuam valendo.
-  const pedido = params.get('slot');
-  const numero = Number(pedido);
+  const slotDoLink = (nome) => {
+    const pedido = params.get(nome);
+    const numero = Number(pedido);
+    return pedido !== null && Number.isInteger(numero) ? numero : null;
+  };
   chegada = {
-    slot: pedido !== null && Number.isInteger(numero) ? numero : null,
+    slot: slotDoLink('slot'),
+    // A segunda tela, de quem saiu da atividade vendo duas lado a lado.
+    lado: slotDoLink('lado'),
     cheia: params.get('cheia') !== '0',
   };
   console.info('[sala] chegou pelo link da atividade', chegada);
@@ -3238,6 +3538,9 @@ function limparSala() {
   participants = [];
   lastRoomState = null;
   activeSlot = null;
+  ladoSlot = null;
+  focoSlot = null;
+  emprestadas.clear();
   telaCheia = false;
   // O quadro é da sala: o da próxima não é o mesmo, e deixar o desenho antigo
   // na folha faria parecer que ele veio de lá.
@@ -3687,6 +3990,51 @@ async function post(url, body, { retry = true } = {}) {
 
 // ----------------------------------------------------------------- websocket
 
+/**
+ * Diz ao servidor até onde cada tela chegou, pelo carimbo de envio do pacote.
+ *
+ * É o que deixa o relay ver a fila que mora nos proxies — o nginx, e dentro do
+ * Discord o proxy dele — e que o `bufferedAmount` do servidor não enxerga. Sem
+ * isto, quem assiste escorregava segundos para o passado sem ninguém notar, e
+ * com a janela minimizada o cano enchia de minutos de vídeo velho. Ver
+ * `atrasoEntregaMs`, no servidor.
+ *
+ * Mandado daqui, na chegada do pacote, e não por um relógio: timer de aba em
+ * segundo plano é estrangulado, e a confirmação atrasada pelo navegador seria
+ * lida como atraso da rede.
+ *
+ * No máximo uma a cada ACK_MS por tela, mas a última nunca se perde: uma fila
+ * inteira despejada de uma vez chega em poucos milissegundos, e sem o envio
+ * atrasado o servidor ficaria com uma confirmação do começo dela — esperando,
+ * para sempre, uma entrega que já aconteceu.
+ */
+const ACK_MS = 100;
+const acks = new Map();
+
+function confirmarEntrega(slot, t) {
+  if (!Number.isFinite(t)) return;
+  let a = acks.get(slot);
+  if (!a) {
+    a = { em: 0, t: null, timer: null };
+    acks.set(slot, a);
+  }
+  a.t = t;
+
+  const agora = performance.now();
+  if (agora - a.em >= ACK_MS) {
+    enviarConfirmacao(slot, a, agora);
+    return;
+  }
+  a.timer ??= setTimeout(() => enviarConfirmacao(slot, a, performance.now()), ACK_MS);
+}
+
+function enviarConfirmacao(slot, a, agora) {
+  clearTimeout(a.timer);
+  a.timer = null;
+  a.em = agora;
+  if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ack', slot, t: a.t }));
+}
+
 function connect() {
   if (!roomTokens) return;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -3717,6 +4065,7 @@ function connect() {
     // para qual decodificador — som e imagem dividem o mesmo canal.
     if (typeof e.data !== 'string') {
       const view = new DataView(e.data);
+      confirmarEntrega(view.getUint8(0), view.getFloat64(10));
       const s = streams.get(view.getUint8(0));
       if (!s) return;
       if (view.getUint8(1) === 3) s.audio?.push(e.data);
@@ -3831,6 +4180,8 @@ function connect() {
   });
 
   ws.addEventListener('close', () => {
+    for (const a of acks.values()) clearTimeout(a.timer);
+    acks.clear();
     closeAllStreams();
     available.clear();
     watching.clear();
@@ -4053,6 +4404,7 @@ function urlDoSite(origem) {
   url.searchParams.set('t', roomTokens.viewerToken);
   if (activeSlot !== null) {
     url.searchParams.set('slot', String(activeSlot));
+    if (ladoSlot !== null) url.searchParams.set('lado', String(ladoSlot));
     url.searchParams.set('cheia', '1');
   }
   return url.toString();
@@ -4370,8 +4722,9 @@ window.addEventListener('keydown', (e) => {
   }
   if (document.querySelector('.modal:not([hidden])')) return;
 
-  // Uma superfície de cada vez: o que está na tela é quem recebe.
-  const alvo = noQuadro ? alvoDoQuadro() : alvoDoPalco(activeSlot);
+  // Uma superfície de cada vez: o que está na tela é quem recebe. Com o palco
+  // dividido, a das duas em que o ponteiro esteve por último.
+  const alvo = noQuadro ? alvoDoQuadro() : alvoDoPalco(telaEmFoco());
 
   if (e.ctrlKey) {
     if (e.key.toLowerCase() === 'z') {
