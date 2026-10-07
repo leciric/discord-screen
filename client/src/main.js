@@ -4,7 +4,11 @@ import { createAudio } from './audio.js';
 import {
   acertarPalco,
   aLargar,
+  DIVISAO_PADRAO,
   dividido,
+  divisaoNoPonteiro,
+  lerDivisao,
+  limitarDivisao,
   porDoLado,
   promover,
   telasNoPalco,
@@ -433,6 +437,8 @@ function setStrip(px) {
   stripW = Math.max(STRIP_MIN, Math.round(px));
   applyStrip();
   store('stripW', String(stripW));
+  // A lateral mais larga encolhe o palco, e o mínimo de cada tela é em pixels.
+  aplicarDivisao();
 }
 
 divider.addEventListener('pointerdown', (e) => {
@@ -454,7 +460,93 @@ divider.addEventListener('pointerdown', (e) => {
 });
 
 divider.addEventListener('dblclick', () => setStrip(STRIP_DEFAULT));
-window.addEventListener('resize', () => inRoom() && applyStrip());
+window.addEventListener('resize', () => {
+  if (!inRoom()) return;
+  applyStrip();
+  aplicarDivisao();
+});
+
+// Quanto do palco dividido fica com a primeira tela. Preferência de quem
+// assiste, como a largura da lateral — ver lerDivisao.
+let divisao = lerDivisao(read('divisaoPalco'));
+
+// Um nó só, como o divisor da lateral: a grade é refeita a cada render, e a
+// classe de arrasto precisa sobreviver a isso.
+const barraDivisao = document.createElement('div');
+barraDivisao.className = 'palco-barra';
+barraDivisao.title = 'Arraste para dar mais espaço a uma das telas · duplo clique restaura';
+barraDivisao.setAttribute('role', 'separator');
+
+const palcoDuplo = () => $('grid').querySelector('.palco-duplo');
+
+/**
+ * Lado a lado ou uma em cima da outra: o mesmo teste do `@container` no CSS,
+ * que mede a caixa de fora do palco.
+ */
+const empilhado = (caixa) => caixa.clientWidth < caixa.clientHeight;
+
+/** Espessura da barra, que não é de nenhuma das duas telas. */
+const espessuraBarra = (empilhadas) => {
+  const r = barraDivisao.getBoundingClientRect();
+  return empilhadas ? r.height : r.width;
+};
+
+/**
+ * Aplica a fração guardada ao palco de agora. Os mínimos são em pixels, então
+ * o que vale numa janela grande pode não caber depois de encolher — o valor
+ * guardado não muda, só o aplicado.
+ */
+function aplicarDivisao() {
+  const caixa = palcoDuplo();
+  if (!caixa) return;
+  const empilhadas = empilhado(caixa);
+  const tamanho = empilhadas ? caixa.clientHeight : caixa.clientWidth;
+  const fracao = limitarDivisao(divisao, tamanho - espessuraBarra(empilhadas));
+  // Em `fr`, e não em pixels: o grid reparte o que sobra da barra, e a
+  // proporção se mantém sozinha até o próximo resize.
+  const paineis = caixa.querySelector('.palco-paineis');
+  paineis.style.setProperty('--painel-a', `${fracao}fr`);
+  paineis.style.setProperty('--painel-b', `${1 - fracao}fr`);
+  barraDivisao.setAttribute('aria-orientation', empilhadas ? 'horizontal' : 'vertical');
+  barraDivisao.setAttribute('aria-valuenow', String(Math.round(fracao * 100)));
+}
+
+function setDivisao(fracao) {
+  divisao = limitarDivisao(fracao);
+  store('divisaoPalco', divisao.toFixed(3));
+  aplicarDivisao();
+}
+
+barraDivisao.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  barraDivisao.classList.add('dragging');
+
+  // Na janela, como no divisor da lateral: a grade é refeita a cada mudança de
+  // estado da sala e o arrasto não pode morrer no meio. Pelo mesmo motivo a
+  // caixa é procurada a cada movimento, e não guardada aqui.
+  const move = (ev) => {
+    const caixa = palcoDuplo();
+    if (!caixa) return;
+    const r = caixa.getBoundingClientRect();
+    const empilhadas = empilhado(caixa);
+    const barra = espessuraBarra(empilhadas);
+    setDivisao(
+      empilhadas
+        ? divisaoNoPonteiro(ev.clientY, r.top, r.height, barra)
+        : divisaoNoPonteiro(ev.clientX, r.left, r.width, barra),
+    );
+  };
+  const up = () => {
+    barraDivisao.classList.remove('dragging');
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', up);
+  };
+
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', up);
+});
+
+barraDivisao.addEventListener('dblclick', () => setDivisao(DIVISAO_PADRAO));
 
 /**
  * Duas formas de mostrar a sala, e o que decide é ter alguém transmitindo.
@@ -649,18 +741,23 @@ function renderGrid() {
     duplo.className = 'palco-duplo';
     const paineis = document.createElement('div');
     paineis.className = 'palco-paineis';
-    paineis.append(...telasNoPalco(palcoAtual()).map(tileDoPalco));
+    // A barra entre as duas, que reparte o palco entre elas.
+    const [a, b] = telasNoPalco(palcoAtual()).map(tileDoPalco);
+    paineis.append(a, barraDivisao, b);
     duplo.append(paineis);
     grid.append(duplo);
   }
 
   if (telaCheia) {
+    aplicarDivisao();
     sincronizarZoom();
     return;
   }
 
   applyStrip();
   grid.append(divider, buildSidebar());
+  // Depois da lateral: é ela que decide quanto sobra para o palco.
+  aplicarDivisao();
   sincronizarZoom();
 }
 

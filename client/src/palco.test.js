@@ -3,7 +3,13 @@ import {
   PALCO_VAZIO,
   acertarPalco,
   aLargar,
+  DIVISAO_MIN,
+  DIVISAO_PADRAO,
+  PAINEL_MIN_PX,
   dividido,
+  divisaoNoPonteiro,
+  lerDivisao,
+  limitarDivisao,
   porDoLado,
   promover,
   telasNoPalco,
@@ -135,5 +141,66 @@ describe('aLargar', () => {
   it('a emprestada que ficou sozinha no destaque continua sendo assistida', () => {
     const depois = tirarDoPalco({ ativo: 0, lado: 1 }, 0);
     expect(aLargar(depois, new Set([1]))).toEqual([]);
+  });
+});
+
+describe('limitarDivisao', () => {
+  it('deixa passar qualquer fração entre os limites', () => {
+    expect(limitarDivisao(0.5, 1000)).toBe(0.5);
+    expect(limitarDivisao(0.7, 1000)).toBe(0.7);
+    expect(limitarDivisao(0.3)).toBe(0.3);
+  });
+
+  it('nenhuma das duas fica abaixo da fração mínima', () => {
+    expect(limitarDivisao(0, 4000)).toBe(DIVISAO_MIN);
+    expect(limitarDivisao(1, 4000)).toBe(1 - DIVISAO_MIN);
+    expect(limitarDivisao(-3)).toBe(DIVISAO_MIN);
+  });
+
+  it('num palco pequeno, o mínimo em pixels manda', () => {
+    // 400px: 160px é 40%, bem acima dos 15%.
+    expect(limitarDivisao(0.1, 400)).toBeCloseTo(PAINEL_MIN_PX / 400);
+    expect(limitarDivisao(0.9, 400)).toBeCloseTo(1 - PAINEL_MIN_PX / 400);
+  });
+
+  it('sem espaço para os dois mínimos, metade para cada', () => {
+    expect(limitarDivisao(0.8, PAINEL_MIN_PX * 2 - 1)).toBe(DIVISAO_PADRAO);
+    expect(limitarDivisao(0.8, 0)).toBe(DIVISAO_PADRAO);
+  });
+
+  it('o que não é número vira metade', () => {
+    expect(limitarDivisao(NaN, 1000)).toBe(DIVISAO_PADRAO);
+    expect(limitarDivisao(Infinity, 1000)).toBe(DIVISAO_PADRAO);
+  });
+});
+
+describe('lerDivisao', () => {
+  it('lê de volta o que foi guardado', () => {
+    expect(lerDivisao((0.68).toFixed(3))).toBe(0.68);
+  });
+
+  it('sem nada guardado, ou com lixo, metade para cada', () => {
+    expect(lerDivisao(null)).toBe(DIVISAO_PADRAO);
+    expect(lerDivisao('')).toBe(DIVISAO_PADRAO);
+    expect(lerDivisao('abc')).toBe(DIVISAO_PADRAO);
+  });
+
+  it('um valor fora dos limites volta para dentro deles', () => {
+    expect(lerDivisao('0.01')).toBe(DIVISAO_MIN);
+    expect(lerDivisao('7')).toBe(1 - DIVISAO_MIN);
+  });
+});
+
+describe('divisaoNoPonteiro', () => {
+  it('o meio da barra é a fração da primeira tela', () => {
+    // Palco de 1010px começando em 100, barra de 10: a barra centrada em 405
+    // deixa 300px para a primeira e 700 para a segunda.
+    expect(divisaoNoPonteiro(405, 100, 1010, 10)).toBeCloseTo(0.3);
+    expect(divisaoNoPonteiro(605, 100, 1010, 10)).toBeCloseTo(0.5);
+  });
+
+  it('arrastar para fora do palco prende no limite', () => {
+    expect(divisaoNoPonteiro(-500, 100, 1010, 10)).toBeCloseTo(PAINEL_MIN_PX / 1000);
+    expect(divisaoNoPonteiro(5000, 100, 1010, 10)).toBeCloseTo(1 - PAINEL_MIN_PX / 1000);
   });
 });
