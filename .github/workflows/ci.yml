@@ -71,10 +71,18 @@ jobs:
           cat server.log
           exit 1
 
+      # Os smokes caem na porta padrão (shared/porta.js) quando ninguém diz
+      # outra, e o servidor acima está na 3001: sem isto, connection refused.
       - name: Smoke do relay
+        env:
+          SMOKE_BASE: http://127.0.0.1:3001
+          SMOKE_WS: ws://127.0.0.1:3001
         run: npm run smoke
 
       - name: Smoke da aba de captura
+        env:
+          SMOKE_BASE: http://127.0.0.1:3001
+          SMOKE_WS: ws://127.0.0.1:3001
         run: npm run smoke:controle
 
       # if: always() porque um smoke vermelho deixaria o processo pendurado, e
