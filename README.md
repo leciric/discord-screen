@@ -286,6 +286,9 @@ lateral some, e ele continua lá).
   proporção dentro do espaço que ganhou. A divisão é **sua**: fica guardada
   neste navegador e vale para as próximas vezes, sem mudar nada para quem mais
   está assistindo.
+
+  ![Palco dividido com a barra arrastada: a tela ocupa a maior parte, e a câmera fica com o resto](docs/palco-dividido-barra.png)
+
 - Cada tela tem a **sua** barra de ferramentas e o **seu** zoom: aproximar uma
   não mexe na outra. O desenho e o laser vão para a tela onde você está
   desenhando, e os atalhos de teclado valem para a tela em que o mouse passou
