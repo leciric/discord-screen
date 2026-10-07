@@ -278,6 +278,14 @@ lateral some, e ele continua lá).
   que largo (a atividade aberta numa faixa estreita, por exemplo), ficam **uma
   em cima da outra**. Cada uma mantém a sua proporção e o nome de quem está
   transmitindo.
+- Entre as duas há uma **barra**: arraste-a para dar mais espaço a uma delas —
+  uma tela compartilhada ao lado de uma câmera, por exemplo, costuma pedir mais
+  espaço para a tela. Lado a lado ela arrasta para os lados; uma em cima da
+  outra, para cima e para baixo. **Duplo clique** volta à metade para cada uma.
+  Nenhuma das duas fica pequena demais para usar, e cada uma continua com a sua
+  proporção dentro do espaço que ganhou. A divisão é **sua**: fica guardada
+  neste navegador e vale para as próximas vezes, sem mudar nada para quem mais
+  está assistindo.
 - Cada tela tem a **sua** barra de ferramentas e o **seu** zoom: aproximar uma
   não mexe na outra. O desenho e o laser vão para a tela onde você está
   desenhando, e os atalhos de teclado valem para a tela em que o mouse passou

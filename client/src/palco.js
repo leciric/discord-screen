@@ -97,3 +97,46 @@ export function aLargar(palco, emprestadas) {
   const noPalco = telasNoPalco(palco);
   return [...emprestadas].filter((slot) => !noPalco.includes(slot));
 }
+
+/**
+ * Quanto do palco dividido fica com a primeira tela, de 0 a 1.
+ *
+ * É preferência de quem assiste — uma tela ao lado de uma câmera pede mais
+ * espaço para a tela —, e por isso vive no localStorage e não na sala. O valor
+ * guardado é só a fração; os limites em pixels dependem do palco de agora e
+ * são aplicados a cada render, como a largura da lateral.
+ */
+export const DIVISAO_PADRAO = 0.5;
+
+// Nenhuma das duas some: abaixo disto a barra de ferramentas do painel já não
+// cabe, e a imagem vira uma miniatura que ninguém pediu.
+export const DIVISAO_MIN = 0.15;
+export const PAINEL_MIN_PX = 160;
+
+/**
+ * Prende a fração entre os limites. Com `total` (os pixels que as duas telas
+ * dividem, sem a barra), cada uma fica também com pelo menos PAINEL_MIN_PX —
+ * e num palco pequeno demais para isso, metade para cada uma.
+ */
+export function limitarDivisao(fracao, total = Infinity) {
+  if (!Number.isFinite(fracao)) return DIVISAO_PADRAO;
+  if (total < PAINEL_MIN_PX * 2) return DIVISAO_PADRAO;
+  const min = Math.max(DIVISAO_MIN, PAINEL_MIN_PX / total);
+  return Math.min(1 - min, Math.max(min, fracao));
+}
+
+/** O valor do localStorage de volta a uma fração; lixo vira metade. */
+export function lerDivisao(texto) {
+  if (texto === null || texto === undefined || texto === '') return DIVISAO_PADRAO;
+  return limitarDivisao(Number(texto));
+}
+
+/**
+ * A fração sob o ponteiro: `pos` é a coordenada dele no eixo da divisão,
+ * `inicio` e `tamanho` os do palco nesse eixo, e `barra` a espessura da barra,
+ * que não é de nenhuma das duas.
+ */
+export function divisaoNoPonteiro(pos, inicio, tamanho, barra) {
+  const total = tamanho - barra;
+  return limitarDivisao((pos - inicio - barra / 2) / total, total);
+}
