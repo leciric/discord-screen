@@ -59,12 +59,15 @@ jobs:
         shell: bash
         env:
           NODE_ENV: development
-          PORT: 3001
+          # A porta padrão (shared/porta.js), e não outra: os smokes e o
+          # PUBLIC_ORIGIN padrão do servidor apontam para ela. Com 3001 aqui,
+          # os dois batiam numa porta fechada desde que o padrão mudou.
+          PORT: 31415
         run: |
           node server/index.js > server.log 2>&1 &
           echo $! > server.pid
           for _ in $(seq 1 60); do
-            curl -sf http://127.0.0.1:3001/api/health > /dev/null && exit 0
+            curl -sf http://127.0.0.1:31415/api/health > /dev/null && exit 0
             sleep 1
           done
           echo 'o servidor não respondeu ao /api/health em 60s'

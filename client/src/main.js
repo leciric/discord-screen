@@ -17,6 +17,7 @@ import {
 import { createBroadcaster } from '../../shared/broadcaster.js';
 import { criarCamada, conter, paraGrade, CORES, ESPESSURAS } from '../../shared/anotacoes.js';
 import { criarFlutuante, flutuarDisponivel } from '../../shared/flutuar.js';
+import { rotaDaFonte } from '../../shared/caminho.js';
 import {
   iceServers,
   criarPeer,
@@ -1408,6 +1409,9 @@ function renderBar() {
   const rotuloShare = telaNoAr ? 'Parar tela' : 'Compartilhar tela';
   btn.dataset.tip = rotuloShare;
   btn.setAttribute('aria-label', rotuloShare);
+
+  // A troca só existe para a captura que mora aqui; a da aba tem o próprio botão.
+  $('swap').hidden = !myBroadcast;
 
   // A câmera tem botão próprio, com o mesmo par ligar/desligar da tela — e a
   // mesma aparência: são a mesma ação em duas fontes, e pintar só uma delas
@@ -4372,19 +4376,21 @@ function opcoesDaFonte() {
   };
 }
 
-/**
- * Liga uma fonte pelo caminho mais curto que existir para ela.
- *
- * Com uma aba já aberta, o pedido vai por ela em vez de abrir outra: seriam
- * duas janelas para a pessoa manter vivas, e a que existe já faz as duas
- * coisas. A aba resolve o que dá — câmera ela liga sozinha, tela precisa do
- * clique lá, porque getDisplayMedia exige gesto do usuário.
- */
 /** Nome da aba de captura, para reencontrá-la em vez de empilhar outra. */
 const JANELA_CAPTURA = 'discord-screen-captura';
 
+/**
+ * Liga uma fonte pelo caminho mais curto que existir para ela.
+ *
+ * Quem decide é `rotaDaFonte` (shared/caminho.js). Com uma aba já aberta, a
+ * câmera vai por ela em vez de abrir outra: seriam duas janelas para a pessoa
+ * manter vivas. A tela fora do Discord não: o seletor abre aqui mesmo, no
+ * clique que acabou de acontecer, sem passar pela aba.
+ */
 function ligarFonte(fonte) {
-  if (abaAberta()) return trazerAba(fonte);
+  const rota = rotaDaFonte({ fonte, inDiscord, abaAberta: abaAberta() });
+  if (rota === 'aba') return trazerAba(fonte);
+  if (rota === 'link') return abrirLink(fonte);
   abrirCaptura(fonte);
 }
 
@@ -4397,13 +4403,9 @@ function ligarFonte(fonte) {
  * janelas qual era.
  */
 function trazerAba(fonte) {
-  // Dentro do Discord a aba foi parar no navegador do sistema, que é outro
-  // processo: daqui não há como focá-la. Abrir de novo é o que existe, e a
-  // fonte vai na URL, então a aba nova já nasce no que se pediu. Se a antiga
-  // continuar aberta, ficam duas — é o preço da fronteira entre os processos.
-  if (inDiscord) return abrirLink(fonte);
-
-  // Fora do Discord a aba é nossa, e o nome fixo a encontra. String vazia de
+  // Só chega aqui fora do Discord (ver rotaDaFonte): dentro dele a aba foi
+  // parar no navegador do sistema, outro processo, e o que existe é abrir de
+  // novo. Aqui a aba é nossa, e o nome fixo a encontra. String vazia de
   // propósito: passar a URL faria o navegador *navegar* nela, e navegar é
   // recarregar — mataria a transmissão que estiver no ar ali dentro.
   const aba = window.open('', JANELA_CAPTURA);
@@ -4561,6 +4563,24 @@ $('share').addEventListener('click', () => {
   }
 
   ligarFonte('tela');
+});
+
+/**
+ * Outra tela no lugar da que está no ar, sem derrubar a transmissão.
+ *
+ * É o que deixa a prévia fora do caminho curto: escolher errado deixou de ser
+ * sem volta. Quem assiste vê a imagem mudar, sem reconectar.
+ */
+$('swap').addEventListener('click', async () => {
+  if (!myBroadcast) return;
+  try {
+    meuStream = await myBroadcast.changeScreen();
+    fecharPreviaLocal();
+    garantirPreviaLocal();
+  } catch (err) {
+    // Cancelar o seletor é escolha, não falha: a tela de antes continua no ar.
+    if (err.name !== 'NotAllowedError') toast(err.message, true);
+  }
 });
 
 $('camera').addEventListener('click', () => {

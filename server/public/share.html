@@ -14,7 +14,7 @@
          dos cabeçalhos no-store guardou a versão antiga por heurística do
          navegador, e continuaria usando ela para sempre. Trocar a query força
          uma URL nova. Incremente ao publicar mudanças nesses arquivos. -->
-    <link rel="stylesheet" href="/share.css?v=29" />
+    <link rel="stylesheet" href="/share.css?v=30" />
   </head>
   <body>
     <main class="card">
@@ -71,8 +71,8 @@
               <button
                 id="tela-escolher"
                 class="primary seta"
-                title="Ver outra tela antes de transmitir"
-                aria-label="Ver outra tela antes de transmitir"
+                title="Ver a tela antes de transmitir"
+                aria-label="Ver a tela antes de transmitir"
               >
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 15l6-6 6 6" /></svg>
               </button>
@@ -96,6 +96,9 @@
               <div><strong id="tela-elapsed">00:00</strong><span>no ar</span></div>
             </div>
             <button id="somAba" class="secondary" hidden>Som de uma aba ou janela</button>
+            <!-- O desfazer de ir ao ar sem prévia: outra tela no lugar desta,
+                 sem derrubar quem está assistindo. -->
+            <button id="tela-trocar" class="secondary">Trocar tela</button>
             <button
               id="tela-flutuar"
               class="secondary"
@@ -230,6 +233,6 @@
       </footer>
     </main>
 
-    <script type="module" src="/share.js?v=29"></script>
+    <script type="module" src="/share.js?v=30"></script>
   </body>
 </html>

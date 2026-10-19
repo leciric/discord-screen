@@ -76,6 +76,25 @@ baixo e escolha a atividade.
 Dentro do Discord não existe lista de salas: quem abre a atividade cai direto na
 sala daquela call, junto com o resto do pessoal que está lá.
 
+### Mostrar a tela: o caminho curto
+
+Dentro do Discord a tela não pode ser capturada na atividade, então o botão
+**Compartilhar tela** abre uma aba no navegador. Lá, **um clique em qualquer
+lugar da página** abre o seletor de tela do navegador — esse clique o navegador
+exige, e o seletor também; o resto não existe. Escolheu, está no ar.
+
+- **Sem prévia no caminho.** Quem quer conferir antes usa a seta ao lado de
+  "Escolher tela e transmitir".
+- **Escolheu errado?** **Trocar tela** abre o seletor de novo e troca a imagem
+  sem derrubar quem está assistindo. No site, o mesmo botão aparece na barra de
+  baixo enquanto a tela está no ar.
+- **A câmera vai direto ao ar**, com a webcam e o fundo da última vez.
+- Qualidade e quadros ficam lembrados no navegador; o som é a caixa
+  "Compartilhar o áudio" do próprio seletor.
+
+O Discord ainda pergunta se você quer abrir o link. Marcar para confiar no
+domínio faz a pergunta sumir das próximas vezes — isso é do Discord, não daqui.
+
 ### O endereço que muda toda vez
 
 Por padrão o endereço público é descartável: **ele muda toda vez que você
@@ -435,8 +454,10 @@ volume, ou clica nele para silenciar.
 ## Câmera: fundo e GIF
 
 A câmera tem botão próprio na barra de baixo, ao lado do de compartilhar tela.
-Ela abre na mesma aba de transmissão, e é lá que ficam os dois ajustes abaixo —
-os dois valem **na hora**, com a câmera já no ar, sem derrubar quem assiste.
+Ela abre na mesma aba de transmissão e vai direto ao ar, com a webcam e o fundo
+da última vez. É lá que ficam os dois ajustes abaixo — os dois valem **na
+hora**, com a câmera já no ar, sem derrubar quem assiste, e ficam lembrados para
+a próxima. Para conferir antes, a seta escolhe a câmera e mostra a prévia.
 
 ### Esconder o que está atrás de você
 
