@@ -23,6 +23,7 @@ import { criarCamada, conter } from '/shared/anotacoes.js?v=3';
 import { criarFlutuante, flutuarDisponivel } from '/shared/flutuar.js?v=1';
 import { criarEstudio } from '/shared/estudio.js?v=1';
 import { carregarAnimacao } from '/shared/animacao.js?v=1';
+import { pedidoDaFonte, cliqueComeca, lembranca, sanearCamera } from '/shared/caminho.js?v=1';
 
 const $ = (id) => document.getElementById(id);
 
@@ -169,23 +170,51 @@ function aplicarConfig(novas) {
 /**
  * A atividade pediu uma fonte.
  *
- * A câmera abre aqui mesmo, mas em prévia: getUserMedia não exige gesto do
- * usuário depois da permissão concedida, então dá para mostrar o que ela vê — e
- * mostrar é o certo, porque ir ao ar com a webcam errada não tem desfazer.
+ * A câmera vai direto ao ar: getUserMedia não exige gesto do usuário, e o
+ * clique em "Ligar câmera" já foi a decisão. A webcam é a da última vez, com o
+ * fundo da última vez — e trocar com ela no ar não derruba ninguém. A prévia
+ * continua à mão pela seta, para quem quiser conferir antes.
  *
- * Tela não abre nem em prévia: `getDisplayMedia` exige ativação transitória e
- * lança InvalidStateError sem ela, então o seletor só nasce de um clique nesta
- * página. O que resta é chamar e esperar.
+ * Tela não abre sozinha: `getDisplayMedia` exige ativação transitória e lança
+ * InvalidStateError sem ela, então o seletor só nasce de um gesto nesta página.
+ * O que dá para fazer é aceitar qualquer gesto — ver `cliqueComeca`.
  */
 function atenderPedido(fonte, novas) {
   aplicarOpcoes(novas);
 
   const painel = paineis[fonte];
-  if (!painel || painel.ativo() || painel.indisponivel()) return;
+  if (!painel) return;
 
-  chamar(fonte);
-  if (fonte === 'camera') painel.abrirPrevia();
+  const acao = pedidoDaFonte({ fonte, ativo: painel.ativo(), indisponivel: painel.indisponivel() });
+  if (acao === 'ligar') {
+    painel.ligar();
+  } else if (acao === 'chamar') {
+    chamar(fonte);
+    painel.setStatus('Clique em qualquer lugar desta página para escolher a tela.');
+    // Enter também serve: o foco já está no botão que transmite.
+    $(`${fonte}-start`).focus();
+  }
 }
+
+/**
+ * Com a tela chamada, a página inteira é o botão.
+ *
+ * A aba acabou de abrir e a pessoa ainda está procurando onde clicar; qualquer
+ * clique já é o gesto que o seletor exige. Os controles com clique próprio
+ * continuam sendo eles mesmos.
+ */
+function comecarPelaPagina(e) {
+  const painel = paineis.tela;
+  if (!painel) return;
+  const chamando = $('bloco-tela').classList.contains('chamando');
+  const tecla = e.type === 'keydown' ? e.key : undefined;
+  if (!cliqueComeca({ chamando, ativo: painel.ativo(), alvo: e.target, tecla })) return;
+  e.preventDefault();
+  painel.ligar();
+}
+
+document.addEventListener('click', comecarPelaPagina);
+document.addEventListener('keydown', comecarPelaPagina);
 
 // --------------------------------------------------------------- controle
 
@@ -258,8 +287,11 @@ function criarPainel(fonte) {
    * escolher a tela de novo.
    */
   let previa = null;
+  // As escolhas da câmera da última vez: sem prévia no caminho, a webcam e o
+  // fundo certos precisam já estar escolhidos quando ela vai ao ar.
+  const memoria = camera ? lembranca(localStorage, 'cameraTransmissao', sanearCamera) : null;
   // Qual câmera. `null` é o que o navegador escolher.
-  let dispositivo = null;
+  let dispositivo = memoria?.ler().dispositivo ?? null;
 
   /**
    * O estúdio, só no painel da câmera.
@@ -498,6 +530,7 @@ function criarPainel(fonte) {
       // Sem escolha explícita, adota a que o navegador deu: assim o tique do
       // menu marca a que está no ar em vez de não marcar nenhuma.
       dispositivo = id ?? s.getVideoTracks()[0]?.getSettings().deviceId ?? null;
+      if (dispositivo) memoria.guardar({ dispositivo });
 
       soltarCamera();
       cameraCrua = s;
@@ -509,6 +542,12 @@ function criarPainel(fonte) {
       setStatus('Prévia — ainda não está no ar.');
       await listarCameras();
     } catch (err) {
+      // A webcam lembrada foi desconectada: a do navegador serve, e é melhor do
+      // que nenhuma — a seta continua trocando.
+      if (id && (err.name === 'OverconstrainedError' || err.name === 'NotFoundError')) {
+        dispositivo = null;
+        return verCamera(null);
+      }
       setStatus(
         err.name === 'NotAllowedError'
           ? 'Acesso à câmera negado. Libere a permissão na barra de endereço e tente de novo.'
@@ -828,7 +867,20 @@ function criarPainel(fonte) {
     return 'Aparece o miolo do quadro; o resto vira o fundo escolhido. Centralize-se e ajuste o tamanho do recorte.';
   }
 
+  /** O fundo escolhido vale para a próxima vez também. */
+  function guardarFundo() {
+    memoria.guardar({
+      fundo: $('camera-fundo').value,
+      cor: $('camera-cor').value,
+      janela: $('camera-janela').value,
+    });
+  }
+
   if (camera) {
+    const lembrado = memoria.ler();
+    if (lembrado.fundo) $('camera-fundo').value = lembrado.fundo;
+    if (lembrado.cor) $('camera-cor').value = lembrado.cor;
+    if (lembrado.janela) $('camera-janela').value = String(lembrado.janela);
     espelharControles();
 
     $('camera-entrada').addEventListener('change', () => {
@@ -854,10 +906,14 @@ function criarPainel(fonte) {
     $('camera-fundo').addEventListener('change', () => {
       espelharControles();
       aplicarFundo();
+      guardarFundo();
     });
 
     $('camera-cor').addEventListener('input', aplicarFundo);
     $('camera-janela').addEventListener('input', aplicarFundo);
+    // `change`, e não `input`: arrastar o recorte não precisa gravar a cada pixel.
+    $('camera-cor').addEventListener('change', guardarFundo);
+    $('camera-janela').addEventListener('change', guardarFundo);
 
     $('camera-fundo-arquivo').addEventListener('change', async () => {
       const arquivo = $('camera-fundo-arquivo').files?.[0];
@@ -884,7 +940,31 @@ function criarPainel(fonte) {
     setStatus(indisponivel, 'error');
   }
 
+  /**
+   * Outra tela no lugar da que está no ar, sem derrubar quem assiste.
+   *
+   * É o desfazer de ir ao ar sem prévia: escolher a janela errada deixou de
+   * custar parar, recomeçar e esperar todo mundo reconectar.
+   */
+  async function trocarTela() {
+    if (!broadcaster) return;
+    try {
+      const nova = await broadcaster.changeScreen();
+      el('preview').srcObject = nova;
+      el('preview')
+        .play()
+        .catch(() => {});
+      // As marcas eram da tela de antes: sobre a nova, apontariam para o nada.
+      camada.limpar();
+      setStatus('Tela trocada.', 'ok');
+    } catch (err) {
+      // Cancelar o seletor é escolha: a tela de antes continua no ar.
+      if (err.name !== 'NotAllowedError') setStatus(err.message, 'error');
+    }
+  }
+
   el('start').addEventListener('click', ligar);
+  if (!camera) el('trocar').addEventListener('click', trocarTela);
   el('flutuar').addEventListener('click', alternarFlutuante);
   el('stop').addEventListener('click', () =>
     broadcaster?.stop(camera ? 'Câmera desligada.' : 'Transmissão encerrada.'),
