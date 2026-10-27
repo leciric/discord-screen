@@ -101,11 +101,13 @@ body {
   gap: 0;
 }
 
-/* O palco tem a forma do vídeo (posta em linha pelo render) e fica centrado na
-   área disponível. As sobras viram fundo da grade, não um retângulo preto com
-   borda verde em volta de nada. */
+/* O palco tem a forma do vídeo (posta em linha pelo render). As sobras viram
+   fundo da grade, não um retângulo preto com borda verde em volta de nada.
+   Centrado na largura, mas encostado no alto: a faixa da tela fica logo acima
+   dela, e centrar na altura abria um vão entre o nome e a imagem — as duas
+   pareciam coisas separadas. */
 .tile-palco[style*='aspect-ratio'] {
-  place-self: center;
+  place-self: start center;
   width: 100%;
   height: auto;
   max-width: 100%;
@@ -114,8 +116,8 @@ body {
 
 /* Tela cheia: some a lateral e a moldura, e sobra só o palco. Fora dela o
    respiro é o mesmo da grade de avatares — a borda não pode pular de tamanho
-   quando alguém começa a transmitir. O espaço que a imagem ganhou veio das
-   barras, que deixaram de reservar faixa (ver `#app.flutua`). */
+   quando alguém começa a transmitir. As barras continuam com as suas faixas:
+   tela cheia é a imagem sem a lateral, não a imagem sob os controles. */
 .grid.palco.cheia {
   grid-template-columns: minmax(0, 1fr);
   padding: 0;
@@ -123,6 +125,102 @@ body {
 
 .grid.palco.cheia .tile {
   border-radius: 0;
+}
+
+/* Uma tela é um painel: a faixa com o nome, as ferramentas e os botões, e
+   embaixo dela a imagem. Nada de controle por cima do vídeo — cada cápsula ali
+   escondia um pedaço do que se veio ver, e quem assiste pediu a imagem limpa.
+   A imagem se ajusta ao que a faixa deixa, como já se ajustava à célula.
+
+   Cada painel se mede (`painel`), para a faixa se rearrumar quando ele é
+   estreito em vez de ser cortada. */
+.painel {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 6px;
+}
+
+.painel-palco {
+  container: painel / inline-size;
+}
+
+/* Nome à esquerda, ferramentas ao centro, botões à direita. As laterais
+   dividem o que sobra por igual, e é isso que mantém as ferramentas no meio. */
+.painel-barra {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.painel-quem,
+.painel-acoes {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.painel-quem {
+  grid-column: 1;
+}
+
+.painel-acoes {
+  grid-column: 3;
+  justify-content: flex-end;
+}
+
+/* Sem imagem por baixo, o preto translúcido das cápsulas sumiria no fundo
+   preto da página: aqui elas levam o cinza dos tiles. */
+.painel-barra .tile-name,
+.painel-barra .tile-watchers,
+.painel-barra .tile-fonte,
+.painel-barra .tile-you {
+  background: var(--tile);
+}
+
+.painel-barra .tile-fonte,
+.painel-barra .tile-you {
+  flex: 0 0 auto;
+}
+
+/* A faixa mora no alto da grade, que recorta o que passa da borda: as dicas
+   abrem para baixo. As dos botões da direita se alinham pela direita, senão a
+   do último saía pela borda da janela. */
+.painel-barra [data-tip]::after {
+  top: calc(100% + 10px);
+  bottom: auto;
+}
+
+.painel-acoes [data-tip]::after {
+  left: auto;
+  right: 0;
+  transform: none;
+}
+
+/* Estreito, as ferramentas não cabem entre o nome e os botões: descem para uma
+   linha só delas, e quebram em mais de uma se nem assim couberem. Antes elas
+   eram cortadas pela borda do painel e os últimos botões sumiam. */
+@container painel (width < 820px) {
+  .painel-barra {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .painel-acoes {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .painel-barra .tools {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-self: center;
+  }
 }
 
 /* Duas telas no palco. A caixa de fora ocupa a célula do palco e é medida
@@ -220,34 +318,38 @@ body {
   }
 }
 
-/* Cada painel se mede sozinho, para a barra encolher quando ele é estreito —
-   metade de uma janela comum já não comporta a barra inteira. */
-.palco-paineis .tile-palco {
-  container: painel / inline-size;
-}
-
+/* Metade de uma janela comum já não comporta a barra inteira: ela encolhe.
+   Os seletores levam `.painel` porque as regras de base de `.tools` vêm mais
+   abaixo no arquivo e, com o mesmo peso, venciam estas — a paleta continuava
+   ali no painel mais estreito e saía pela borda dele. */
 @container painel (width < 560px) {
-  .tools {
-    top: 6px;
+  .painel .tools {
     gap: 0;
     padding: 3px;
   }
 
-  .tool {
+  .painel .tool {
     min-width: 30px;
     height: 30px;
     padding: 0 5px;
   }
 
-  /* O mesmo corte da janela estreita: a cor escolhida continua valendo. */
-  .tool-cores,
-  .tool-sep {
+  /* O mesmo corte da janela estreita: a cor escolhida continua valendo. A
+     contagem de quem assiste sai junto, para o nome não virar duas letras. */
+  .painel .tool-cores,
+  .painel .tool-sep,
+  .painel .tile-watchers {
     display: none;
   }
 }
 
 /* Em tela cheia as duas quase encostam uma na outra, como o palco encosta na
-   borda — mas a barra ainda precisa de onde pegar. */
+   borda — mas a barra ainda precisa de onde pegar. A faixa de cada tela ganha
+   um respiro nas pontas, que a grade deixou de dar. */
+.grid.palco.cheia .painel-barra {
+  padding: 6px 8px 0;
+}
+
 .grid.palco.cheia .palco-paineis {
   --barra: 6px;
 }
@@ -331,6 +433,21 @@ body {
 .sidebar .tile {
   flex: 0 0 auto;
   aspect-ratio: 16 / 9;
+}
+
+.sidebar .painel {
+  flex: 0 0 auto;
+  grid-template-rows: auto auto;
+  gap: 4px;
+}
+
+/* Na miniatura a faixa é só nome e botões: as ferramentas são do palco. */
+.sidebar .painel-barra {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.sidebar .painel-acoes {
+  grid-column: 2;
 }
 
 /* Na miniatura sobra pouco espaço: fica o nome, sai o resto. */
@@ -493,39 +610,23 @@ body {
 
 /* ------------------------------------------------------- barra do palco */
 
-/* Flutua sobre a tela, no alto e ao centro: o canto de baixo já tem o nome, o
-   contador de quem assiste e o botão de parar. Fica discreta enquanto o mouse
-   está longe — a tela é que importa —, e inteira assim que ele chega. */
+/* Na faixa da tela, ao centro, e nunca sobre a imagem. Inteira o tempo todo:
+   apagada, ela só servia para deixar ver o vídeo por baixo, e por baixo dela
+   agora não há vídeo nenhum. Quando não cabe numa linha, quebra em duas — o
+   raio fixo é o que mantém a cápsula com cara de cápsula nos dois casos. */
 .tools {
-  position: absolute;
-  top: 10px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 3;
+  position: relative;
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   align-items: center;
   gap: 2px;
+  min-width: 0;
+  max-width: 100%;
   padding: 4px;
-  border-radius: 999px;
+  border-radius: 22px;
   background: rgba(15, 16, 18, 0.82);
   border: 1px solid var(--line);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(6px);
-  opacity: 0.28;
-  transition: opacity 0.15s;
-}
-
-/* Com ferramenta escolhida ou zoom aplicado ela fica firme (`.fixa`): apagar no
-   meio de um desenho seria esconder justamente o controle que está em uso.
-   O quadro entra pela caixa, e não pelo tile: lá a barra não tem tile nenhum
-   que a contenha, e sem esta linha ela ficava sempre no apagado — dava para
-   ver que existia algo ali em cima, mas não o quê. */
-.tile-palco:hover .tools,
-.board-box:hover .tools,
-.tools:hover,
-.tools:focus-within,
-.tools.fixa {
-  opacity: 1;
 }
 
 .tool {
@@ -572,10 +673,9 @@ body {
 }
 
 /* A dica destes botões abre para baixo, ao contrário de todas as outras.
-   A barra mora no alto do palco e o tile recorta o que passa da borda, então
-   para cima a dica saía fatiada — só a última fileira de pixels aparecia,
-   encostada na moldura. Para baixo ela cai sobre o vídeo, que é justamente o
-   espaço que sobra. */
+   A barra mora no alto do palco e a grade recorta o que passa da borda, então
+   para cima a dica saía fatiada. Para baixo ela cai sobre o vídeo só enquanto
+   o mouse está no botão — é uma dica, não um controle. */
 .tools [data-tip]::after {
   top: calc(100% + 10px);
   bottom: auto;
@@ -669,40 +769,13 @@ body {
   font-size: 12.5px;
 }
 
-/* Canto inferior direito: livre, já que o nome fica à esquerda e o "você" em
-   cima. Aparece ao passar o mouse para não poluir a grade parada. */
-.tile-stop {
-  position: absolute;
-  right: 8px;
-  bottom: 8px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, 0.65);
-  color: #fff;
-  opacity: 0;
-  transition:
-    opacity 0.15s,
-    background 0.15s;
-}
-
-.tile:hover .tile-stop {
-  opacity: 1;
-}
-
-/* Dividir o palco, ou voltar a uma tela só. Mora ao lado do parar e aparece
-   com ele no palco; na lateral fica sempre à vista, porque é ali que a divisão
-   começa e uma miniatura não tem hover que se adivinhe. */
+/* Parar de assistir e dividir o palco (ou voltar a uma tela só) moram na
+   ponta direita da faixa, sempre à vista: fora da imagem não há o que poluir,
+   e um botão que só aparece no hover é um botão que ninguém acha. */
+.tile-stop,
 .tile-lado {
-  position: absolute;
-  right: 8px;
-  bottom: 8px;
-  z-index: 2;
+  position: relative;
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -711,21 +784,15 @@ body {
   padding: 0;
   border: 0;
   border-radius: 50%;
-  background: rgba(0, 0, 0, 0.65);
+  background: var(--tile);
   color: #fff;
-  opacity: 0;
-  transition:
-    opacity 0.15s,
-    background 0.15s;
+  transition: background 0.15s;
 }
 
-.tile-lado.com-parar {
-  right: 46px;
-}
-
-.tile:hover .tile-lado,
+.sidebar .tile-stop,
 .sidebar .tile-lado {
-  opacity: 1;
+  width: 26px;
+  height: 26px;
 }
 
 .tile-lado:hover {
@@ -918,25 +985,17 @@ body {
 }
 
 /* Rótulo da fonte. Só a câmera leva um: tela é o caso comum, e marcar as duas
-   viraria ruído em cima de cada miniatura. Canto de cima à esquerda, que é o
-   único livre — o nome e a plateia ficam no rodapé, o parar fica à direita. */
+   viraria ruído em cada faixa. Vem antes do nome, que é de quem ela é. */
 .tile-fonte {
-  position: absolute;
-  top: 8px;
-  left: 8px;
   padding: 3px 8px;
   border-radius: 6px;
   background: rgba(0, 0, 0, 0.65);
   color: var(--text);
   font-size: 11.5px;
   font-weight: 500;
-  /* Não rouba o clique do tile, que alterna destaque e tela cheia. */
-  pointer-events: none;
 }
 
 .sidebar .tile-fonte {
-  top: 5px;
-  left: 5px;
   padding: 2px 6px;
   font-size: 10.5px;
 }
@@ -968,9 +1027,9 @@ body {
   opacity: 0.8;
 }
 
-/* Uma lista suspensa, dois donos: a plateia de uma tela (abre para cima, a
-   partir do rodapé do tile) e as pessoas da sala (abre para baixo, a partir da
-   pílula do topo). Mesma caixa, só muda de que lado ela cresce. */
+/* Uma lista suspensa, dois donos: a plateia de uma tela (a partir da faixa da
+   tela) e as pessoas da sala (a partir da pílula do topo). Os dois moram no
+   alto, e a grade recorta o que passa da borda: as duas abrem para baixo. */
 .hover-list {
   position: absolute;
   left: 0;
@@ -992,7 +1051,7 @@ body {
 }
 
 .tile-watchers .hover-list {
-  bottom: calc(100% + 6px);
+  top: calc(100% + 6px);
 }
 
 .pill .hover-list {
@@ -1118,9 +1177,12 @@ button {
   cursor: pointer;
 }
 
-/* Sem transmissão no palco as barras ocupam espaço no layout: não há imagem
-   embaixo para obstruir, e nada precisa sumir sob o cursor. Havendo, é o
-   contrário — o porquê está na regra de `#app.flutua`. */
+/* As barras da sala ocupam faixa própria no layout, com transmissão ou sem.
+   Flutuando sobre o vídeo elas escondiam a parte de cima e a de baixo da tela
+   compartilhada — justamente onde ficam a aba do navegador, a barra de tarefas
+   e o terminal —, e sumir com o cursor parado só trocava o problema por
+   controles que não estavam lá quando se ia procurá-los. A imagem cabe no que
+   as barras deixam, e nada se mexe quando alguém começa a transmitir. */
 .topbar {
   flex: 0 0 auto;
   display: flex;
@@ -1138,76 +1200,6 @@ button {
   padding: 0 16px 16px;
 }
 
-/* Com tela no palco as barras saem do layout e flutuam sobre o vídeo: cada
-   faixa reservada é uma tira de imagem a menos, e a imagem é o que se veio ver.
-   Vale fora da tela cheia também — a faixa desperdiçada é a mesma nos dois
-   modos. Paradas elas somem sozinhas, e qualquer movimento do cursor as traz de
-   volta: quem não mexe o mouse não está procurando botão nenhum. */
-#app.flutua .topbar,
-#app.flutua .bottombar {
-  position: absolute;
-  left: 0;
-  right: 0;
-  z-index: 10;
-  transition: opacity 0.25s;
-}
-
-/* Flutuando, a barra é uma camada da largura inteira sobre a imagem — e uma
-   camada rouba o ponteiro em toda a sua área, inclusive onde não há cápsula
-   nenhuma desenhada. Era essa faixa transparente que engolia a barra de
-   ferramentas: ela mora no alto ao centro, exatamente atrás da topbar, e nem o
-   clique nem o `:hover` que a acende chegavam lá. Em tela cheia e no quadro,
-   onde a barra encosta na borda de cima, não sobrava jeito nenhum de desenhar.
-
-   Quem recebe ponteiro é a cápsula, não a faixa. O resto é ar, e o que estiver
-   embaixo continua ao alcance. */
-#app.flutua .topbar,
-#app.flutua .bottombar {
-  pointer-events: none;
-}
-
-#app.flutua .topbar > *,
-#app.flutua .bottombar > * {
-  pointer-events: auto;
-}
-
-/* Coladas na borda as cápsulas encostam no canto do vídeo e ficam metade
-   dentro, metade fora. O recuo é o mesmo em cima e embaixo: a barra flutua
-   dentro da imagem, não pendurada na quina dela. */
-#app.flutua .topbar {
-  top: 12px;
-}
-
-#app.flutua .bottombar {
-  bottom: 12px;
-}
-
-/* Com a lateral no ar o palco não é a janela inteira, e uma barra centrada na
-   janela aparece visivelmente à direita do vídeo. O recuo é a lateral mais o
-   divisor — as mesmas medidas que a grade usa nas colunas. */
-#app.flutua.palco:not(.cheia) .bottombar {
-  right: calc(var(--strip, 300px) + 10px);
-}
-
-/* Vale sempre que as barras flutuam, com transmissão ou sem: elas cobrem a
-   grade de avatares do mesmo jeito que cobririam o vídeo, e barra que fica é
-   barra que atrapalha. pointer-events junto com a opacidade, porque uma barra
-   invisível continua roubando o clique que era para o que está embaixo. */
-#app.flutua.ocioso .topbar,
-#app.flutua.ocioso .bottombar {
-  opacity: 0;
-}
-
-/* Nas cápsulas, e não só na faixa: a regra acima devolveu o ponteiro a elas, e
-   sem repetir o desligamento aqui uma barra invisível continuaria recebendo o
-   clique que era do vídeo. */
-#app.flutua.ocioso .topbar,
-#app.flutua.ocioso .bottombar,
-#app.flutua.ocioso .topbar > *,
-#app.flutua.ocioso .bottombar > * {
-  pointer-events: none;
-}
-
 /* Sem nada visível dentro, a barra vira uma faixa vazia — é o que sobra no
    lobby, onde todos os controles da sala saem de cena. */
 .topbar:not(:has(> :not([hidden]))),
@@ -1222,8 +1214,9 @@ button {
   white-space: nowrap;
 }
 
-/* Encostado embaixo, como a barra de controles de uma call. O respiro menor
-   embaixo do que em cima é de propósito: a barra pertence à borda da tela. */
+/* Fundo em --tile, como a contagem da lateral: a pílula mora na faixa da
+   barra de cima, sobre o preto da página, e o preto translúcido de quando ela
+   flutuava sobre o vídeo sumia ali. */
 .pill {
   position: relative;
   display: inline-flex;
@@ -1231,8 +1224,7 @@ button {
   gap: 7px;
   padding: 7px 13px;
   border-radius: 999px;
-  background: rgba(0, 0, 0, 0.65);
-  backdrop-filter: blur(8px);
+  background: var(--tile);
   color: var(--text);
   font-size: 13px;
   font-weight: 500;
@@ -1838,7 +1830,6 @@ button {
   }
 
   .tools {
-    top: 6px;
     gap: 0;
     padding: 3px;
   }
@@ -1918,6 +1909,8 @@ button {
   flex: 1;
   min-height: 0;
   display: flex;
+  flex-direction: column;
+  gap: 8px;
   padding: 10px;
 }
 
@@ -1982,10 +1975,12 @@ button {
   cursor: grabbing;
 }
 
-/* A barra do quadro é a mesma do palco, e a única diferença é onde ela mora:
-   aqui não há tile que a contenha, então ela se prende à caixa. */
+/* A barra do quadro é a mesma do palco, numa faixa acima da caixa: a folha
+   ocupa a caixa inteira quando a janela tem a forma dela, e a barra por cima
+   cobria o alto do desenho. */
 .board .tools {
-  top: 12px;
+  flex: 0 0 auto;
+  align-self: center;
 }
 
 /* Ninguém desenhou ainda: dizer isso é melhor que uma folha em branco que não
