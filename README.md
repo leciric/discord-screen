@@ -423,6 +423,8 @@ ao passar o mouse.
 Por cima da imagem só ficam os desenhos, o laser e o aviso de quando ela não
 chega.
 
+![O tamanho da imagem antes do #6 (botões flutuando por cima), depois dele (faixas em cima e embaixo) e com o trilho na lateral](docs/trilho-antes-depois.png)
+
 ---
 
 ## Quadro branco
