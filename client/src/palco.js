@@ -140,3 +140,27 @@ export function divisaoNoPonteiro(pos, inicio, tamanho, barra) {
   const total = tamanho - barra;
   return limitarDivisao((pos - inicio - barra / 2) / total, total);
 }
+
+/**
+ * Onde mora o trilho de controles: na lateral do palco ou embaixo dele.
+ *
+ * Nenhum controle fica sobre a imagem, então ele vai para onde a imagem já não
+ * chega — a sobra que a forma do vídeo deixa na área. Tela compartilhada é
+ * larga, e na janela comum a sobra é dos lados; na atividade estreita do
+ * Discord, mais alta que larga, é em cima e embaixo. Decidir pela janela
+ * erraria a tela cheia de um monitor em pé e a lateral aberta numa janela
+ * quadrada: o que conta é a forma da área contra a forma do que se mostra.
+ *
+ * `largura` e `altura` são a área do palco sem trilho nenhum, `proporcao` é a
+ * do conteúdo (largura sobre altura) e `espessura`, quanto o trilho tira da
+ * dimensão em que ele mora. Vence o lado em que a imagem fica maior; no
+ * empate — a sobra engole o trilho dos dois jeitos —, a lateral na área
+ * deitada e embaixo na área em pé, que é onde a sobra é maior.
+ */
+export function trilhoEmBaixo({ largura, altura, proporcao, espessura }) {
+  if (!(largura > 0 && altura > 0 && proporcao > 0)) return altura > largura;
+  const naLateral = Math.min(largura - espessura, altura * proporcao);
+  const embaixo = Math.min(largura, (altura - espessura) * proporcao);
+  if (Math.abs(embaixo - naLateral) < 0.5) return altura > largura;
+  return embaixo > naLateral;
+}

@@ -37,11 +37,28 @@ body {
   overflow: hidden;
 }
 
+/* Duas colunas: a área (grade, quadro, lobby, avisos — um de cada vez, todos
+   na mesma célula) e o trilho de controles à direita dela. Quando a sobra da
+   imagem é embaixo, e não dos lados, o trilho deita numa linha abaixo da área
+   (`.trilho-baixo`, posto por `arrumarTrilho`). Sem nada visível dentro, como
+   no lobby, a coluna dele some e a área fica com a janela inteira. */
 #app {
   position: relative;
   height: 100%;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+#app > * {
+  grid-area: 1 / 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+#app.trilho-baixo {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
 }
 
 /* -------------------------------------------------------------------- grade */
@@ -57,7 +74,8 @@ body {
      da barra inferior. */
   grid-auto-rows: minmax(0, 1fr);
   gap: 10px;
-  /* Mesmo respiro nas quatro bordas: é o que separa o vídeo das barras. */
+  /* Mesmo respiro nas quatro bordas: é o que separa o vídeo do trilho e da
+     borda da janela. */
   padding: 16px;
   overflow: hidden;
 }
@@ -103,9 +121,9 @@ body {
 
 /* O palco tem a forma do vídeo (posta em linha pelo render). As sobras viram
    fundo da grade, não um retângulo preto com borda verde em volta de nada.
-   Centrado na largura, mas encostado no alto: a faixa da tela fica logo acima
-   dela, e centrar na altura abria um vão entre o nome e a imagem — as duas
-   pareciam coisas separadas. */
+   Com faixa (as telas do palco dividido), encostado no alto: a faixa fica logo
+   acima dela, e centrar na altura abria um vão entre o nome e a imagem. Sem
+   faixa — uma tela só, cuja faixa foi para o trilho —, no meio da área. */
 .tile-palco[style*='aspect-ratio'] {
   place-self: start center;
   width: 100%;
@@ -114,10 +132,14 @@ body {
   max-height: 100%;
 }
 
+.sem-faixa > .tile-palco[style*='aspect-ratio'] {
+  place-self: center;
+}
+
 /* Tela cheia: some a lateral e a moldura, e sobra só o palco. Fora dela o
    respiro é o mesmo da grade de avatares — a borda não pode pular de tamanho
-   quando alguém começa a transmitir. As barras continuam com as suas faixas:
-   tela cheia é a imagem sem a lateral, não a imagem sob os controles. */
+   quando alguém começa a transmitir. O trilho continua ao lado: tela cheia é
+   a imagem sem a lateral, não a imagem sob os controles. */
 .grid.palco.cheia {
   grid-template-columns: minmax(0, 1fr);
   padding: 0;
@@ -130,7 +152,11 @@ body {
 /* Uma tela é um painel: a faixa com o nome, as ferramentas e os botões, e
    embaixo dela a imagem. Nada de controle por cima do vídeo — cada cápsula ali
    escondia um pedaço do que se veio ver, e quem assiste pediu a imagem limpa.
-   A imagem se ajusta ao que a faixa deixa, como já se ajustava à célula.
+
+   A faixa só fica acima da imagem no palco dividido: duas telas largas lado a
+   lado ficam estreitas e baixas, e ali a sobra é em cima delas. Com uma tela
+   só a faixa vai para o trilho (`.sem-faixa`), e a imagem fica com a altura
+   inteira — tela larga é justamente a que mais sente a altura que perde.
 
    Cada painel se mede (`painel`), para a faixa se rearrumar quando ele é
    estreito em vez de ser cortada. */
@@ -146,6 +172,11 @@ body {
 
 .painel-palco {
   container: painel / inline-size;
+}
+
+.painel.sem-faixa {
+  grid-template-rows: minmax(0, 1fr);
+  gap: 0;
 }
 
 /* Nome à esquerda, ferramentas ao centro, botões à direita. As laterais
@@ -189,8 +220,8 @@ body {
   flex: 0 0 auto;
 }
 
-/* A faixa mora no alto da grade, que recorta o que passa da borda: as dicas
-   abrem para baixo. As dos botões da direita se alinham pela direita, senão a
+/* A faixa mora no alto do painel, e a grade recorta o que passa da borda: as
+   dicas abrem para baixo. As dos botões da direita se alinham pela direita, senão a
    do último saía pela borda da janela. */
 .painel-barra [data-tip]::after {
   top: calc(100% + 10px);
@@ -673,9 +704,10 @@ body {
 }
 
 /* A dica destes botões abre para baixo, ao contrário de todas as outras.
-   A barra mora no alto do palco e a grade recorta o que passa da borda, então
-   para cima a dica saía fatiada. Para baixo ela cai sobre o vídeo só enquanto
-   o mouse está no botão — é uma dica, não um controle. */
+   Na faixa do palco dividido a barra mora no alto do painel e a grade recorta
+   o que passa da borda, então para cima a dica saía fatiada. Para baixo ela cai
+   sobre o vídeo só enquanto o mouse está no botão — é uma dica, não um
+   controle. No trilho, as dicas abrem para o lado (ver `.trilho`). */
 .tools [data-tip]::after {
   top: calc(100% + 10px);
   bottom: auto;
@@ -1027,9 +1059,9 @@ body {
   opacity: 0.8;
 }
 
-/* Uma lista suspensa, dois donos: a plateia de uma tela (a partir da faixa da
-   tela) e as pessoas da sala (a partir da pílula do topo). Os dois moram no
-   alto, e a grade recorta o que passa da borda: as duas abrem para baixo. */
+/* Uma lista suspensa, dois donos: a plateia de uma tela e as pessoas da sala.
+   Na faixa do palco dividido ela abre para baixo, porque a grade recorta o que
+   passa da borda de cima; no trilho, abre para o lado de dentro. */
 .hover-list {
   position: absolute;
   left: 0;
@@ -1177,46 +1209,9 @@ button {
   cursor: pointer;
 }
 
-/* As barras da sala ocupam faixa própria no layout, com transmissão ou sem.
-   Flutuando sobre o vídeo elas escondiam a parte de cima e a de baixo da tela
-   compartilhada — justamente onde ficam a aba do navegador, a barra de tarefas
-   e o terminal —, e sumir com o cursor parado só trocava o problema por
-   controles que não estavam lá quando se ia procurá-los. A imagem cabe no que
-   as barras deixam, e nada se mexe quando alguém começa a transmitir. */
-.topbar {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 16px 16px 0;
-}
-
-.bottombar {
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-  padding: 0 16px 16px;
-}
-
-/* Sem nada visível dentro, a barra vira uma faixa vazia — é o que sobra no
-   lobby, onde todos os controles da sala saem de cena. */
-.topbar:not(:has(> :not([hidden]))),
-.bottombar:not(:has(.btn:not([hidden]))) {
-  display: none;
-}
-
-.room-pill {
-  max-width: 240px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Fundo em --tile, como a contagem da lateral: a pílula mora na faixa da
-   barra de cima, sobre o preto da página, e o preto translúcido de quando ela
-   flutuava sobre o vídeo sumia ali. */
+/* Fundo em --tile, como a contagem da lateral: a pílula mora no trilho, sobre
+   o preto da página, e o preto translúcido de quando ela flutuava sobre o
+   vídeo sumia ali. */
 .pill {
   position: relative;
   display: inline-flex;
@@ -1239,39 +1234,6 @@ button {
   stroke-linecap: round;
   stroke-linejoin: round;
   opacity: 0.75;
-}
-
-/* -------------------------------------------------------------------- dock */
-
-.dock {
-  display: flex;
-  gap: 10px;
-}
-
-/* No dock todo botão é só ícone. O padding lateral do .btn existe para os que
-   têm texto e, aqui, dava 49 de largura para 46 de altura — redondo de longe,
-   ovalado de perto. Largura fixa igual à altura resolve sem mexer nos botões
-   com rótulo, que continuam se ajustando ao texto. */
-.dock .btn {
-  width: 46px;
-  padding: 0;
-}
-
-/* Cápsulas separadas por função, como na call: a ação principal, o que é da
-   sala, e a saída. O agrupamento é o que deixa a barra legível de relance. */
-.group {
-  display: flex;
-  gap: 6px;
-  padding: 5px;
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.7);
-  backdrop-filter: blur(8px);
-}
-
-/* Grupo sem nenhum botão visível vira uma bolha escura solta na tela — é o que
-   sobrava no lobby, onde todos os controles da sala saem de cena. */
-.group:not(:has(> .btn:not([hidden]))) {
-  display: none;
 }
 
 /* position: relative ancora a dica que aparece ao passar o mouse. */
@@ -1375,7 +1337,13 @@ button {
 
 /* ------------------------------------------------------------------ painel */
 
+/* Diagnóstico, no canto de baixo, ao lado do trilho. É leitura, não controle,
+   e só aparece para quem pede (Ctrl+Shift+D). */
 .panel {
+  position: absolute;
+  right: 64px;
+  bottom: 16px;
+  z-index: 30;
   width: min(300px, calc(100vw - 28px));
   padding: 14px 16px;
   border-radius: 10px;
@@ -1568,7 +1536,7 @@ button {
 /* ------------------------------------------------------------------ perfil */
 
 /* O avatar preenche o botão inteiro, para o disco colorido ficar do mesmo
-   tamanho dos círculos escuros dos outros botões do dock. O `.avatar` do tile
+   tamanho dos círculos escuros dos outros botões do trilho. O `.avatar` do tile
    usa largura fluida (clamp), que aqui precisa ser anulada. */
 .profile-head {
   display: flex;
@@ -1748,6 +1716,423 @@ button {
   cursor: pointer;
 }
 
+/* ------------------------------------------------------------------ trilho */
+
+/* Os controles da sala e os da tela em destaque, numa coluna de ícones à
+   direita da área. Antes eles flutuavam sobre a imagem; depois ganharam faixas
+   próprias em cima e embaixo, e a imagem encolheu na altura — que é a medida
+   que falta a uma tela larga. A sobra de uma tela 16:9 é dos lados, e é lá que
+   o trilho mora: com a lateral aberta ele é a borda de fora dela e sai da
+   largura dela (`applyStrip`), não da do palco.
+
+   Fino de propósito: botão de 32px, que ainda se acerta sem mirar, e nada de
+   rótulo — cada um diz o que faz na dica. O que não cabe na altura vai para o
+   "mais" (`acomodarTrilho`). */
+#app > .trilho {
+  grid-area: 1 / 2;
+}
+
+.trilho {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  /* A grade já dá os 16px entre a imagem e o trilho. */
+  padding: 16px 8px 16px 0;
+}
+
+.trilho > * {
+  flex-shrink: 0;
+}
+
+/* Na tela cheia a grade não tem respiro: o trilho traz o dele. */
+#app:has(.grid.cheia:not([hidden])) .trilho {
+  padding: 4px;
+}
+
+/* Deitado: uma linha embaixo da imagem, para quando a sobra é ali. */
+#app.trilho-baixo > .trilho {
+  grid-area: 2 / 1;
+}
+
+#app.trilho-baixo .trilho {
+  flex-direction: row;
+  justify-content: safe center;
+  padding: 0 16px 8px;
+}
+
+/* Sem nada visível dentro, a coluna some — é o que sobra no lobby, onde todos
+   os controles da sala saem de cena. */
+.trilho:not(:has(.btn:not([hidden]):not([hidden] *))) {
+  display: none;
+}
+
+/* Nem sem o que foi para o "mais" o trilho coube: quebra (`acomodarTrilho`). */
+.trilho.quebra {
+  flex-wrap: wrap;
+  align-content: center;
+}
+
+/* O "mais" encosta no fim do trilho, longe do que mudou de lugar. */
+#trilhoMais {
+  margin-top: auto;
+}
+
+#app.trilho-baixo #trilhoMais {
+  margin: 0 0 0 auto;
+}
+
+/* Cápsulas separadas por função, como na call: a sala, a tela, o que se
+   transmite, o que se vê e a saída. O agrupamento é o que deixa o trilho
+   legível de relance. */
+.group,
+.trilho .painel-quem,
+.trilho .painel-acoes,
+.trilho .tools {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--panel);
+}
+
+#app.trilho-baixo .group,
+#app.trilho-baixo .trilho .painel-barra,
+#app.trilho-baixo .trilho .painel-quem,
+#app.trilho-baixo .trilho .painel-acoes,
+#app.trilho-baixo .trilho .tools {
+  flex-direction: row;
+}
+
+/* Grupo sem nenhum botão visível vira uma bolha escura solta — é o que sobra
+   no lobby, onde todos os controles da sala saem de cena. */
+.group:not(:has(> :not([hidden]))) {
+  display: none;
+}
+
+.trilho .btn {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  padding: 0;
+}
+
+.trilho .btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* A dica abre para o lado de dentro, à esquerda do trilho: para cima ela cairia
+   em cima do botão de cima. Deitado, volta a abrir para cima. */
+#app:not(.trilho-baixo) .trilho [data-tip]::after {
+  top: 50%;
+  bottom: auto;
+  left: auto;
+  right: calc(100% + 10px);
+  transform: translateY(-50%);
+}
+
+#app.trilho-baixo .trilho [data-tip]::after {
+  top: auto;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+}
+
+/* As pílulas viram ícone: a contagem embaixo do desenho, e o nome da sala na
+   dica. */
+.trilho .pill {
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  width: 32px;
+  min-height: 32px;
+  padding: 5px 0 4px;
+  font-size: 11.5px;
+  line-height: 1;
+}
+
+.trilho .room-pill {
+  padding: 0;
+}
+
+#app.trilho-baixo .trilho .pill {
+  flex-direction: row;
+  width: auto;
+  min-width: 32px;
+  padding: 0 9px;
+  gap: 5px;
+}
+
+#app.trilho-baixo .trilho .room-pill {
+  padding: 0;
+}
+
+/* A lista de pessoas abre para dentro, à esquerda; deitado, para cima. */
+#app:not(.trilho-baixo) .trilho .hover-list {
+  top: 0;
+  bottom: auto;
+  left: auto;
+  right: calc(100% + 8px);
+}
+
+#app.trilho-baixo .trilho .hover-list {
+  top: auto;
+  bottom: calc(100% + 8px);
+}
+
+/* A faixa da tela, empilhada: quem transmite, as ferramentas e os botões. */
+.trilho-tela:empty {
+  display: none;
+}
+
+.trilho .painel-barra {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+/* No lugar do nome, a foto de quem transmite; o nome — e se é câmera, e se é
+   você — está na dica dela. */
+.trilho .tile-fonte,
+.trilho .tile-you {
+  display: none;
+}
+
+.trilho .tile-name {
+  position: relative;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 50%;
+  background: none;
+  font-size: 0;
+  overflow: visible;
+}
+
+.trilho .tile-name .avatar {
+  width: 32px;
+  height: 32px;
+  font-size: 12px;
+}
+
+.trilho .tile-name .dot {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--panel);
+  box-sizing: content-box;
+}
+
+.painel-barra .tile-name .avatar {
+  display: none;
+}
+
+.trilho .painel-barra .tile-name .avatar {
+  display: grid;
+}
+
+.painel-barra .tile-name::after {
+  content: none;
+}
+
+.trilho .painel-barra .tile-name::after {
+  content: attr(data-tip);
+}
+
+.trilho .tile-watchers {
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  width: 32px;
+  min-height: 32px;
+  padding: 4px 0 3px;
+  background: none;
+  font-size: 11px;
+  line-height: 1;
+}
+
+#app.trilho-baixo .trilho .tile-watchers {
+  flex-direction: row;
+  width: auto;
+  padding: 0 6px;
+  gap: 4px;
+}
+
+.trilho .tile-stop,
+.trilho .tile-lado {
+  width: 32px;
+  height: 32px;
+}
+
+/* A barra de ferramentas, em pé. A paleta vira uma grade de duas colunas, e o
+   zoom cabe na largura de um botão. */
+.trilho .tools {
+  flex-wrap: nowrap;
+}
+
+.trilho .tool {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0;
+}
+
+.trilho .tool-zoom {
+  font-size: 10px;
+  letter-spacing: -0.02em;
+}
+
+#app:not(.trilho-baixo) .trilho .tool-sep {
+  width: 18px;
+  height: 1px;
+  margin: 3px 0;
+}
+
+/* Separador sem nada entre ele e o próximo — o que ficava ali foi para o
+   "mais" —, ou no fim da barra, não separa nada. */
+.trilho .tool-sep + .tool-sep,
+.trilho .tool-sep:not(:has(~ :not(.tool-sep, [hidden]))) {
+  display: none;
+}
+
+#app:not(.trilho-baixo) .trilho .tool-cores {
+  display: grid;
+  grid-template-columns: repeat(2, 14px);
+  justify-content: center;
+  justify-items: center;
+  gap: 4px 3px;
+  padding: 4px 0;
+}
+
+#app:not(.trilho-baixo) .trilho .tool-cores[hidden] {
+  display: none;
+}
+
+#app:not(.trilho-baixo) .trilho .cor,
+#app:not(.trilho-baixo) .trilho .grossura {
+  width: 14px;
+  height: 14px;
+}
+
+#app:not(.trilho-baixo) .trilho .grossura {
+  border-radius: 4px;
+}
+
+#app:not(.trilho-baixo) .trilho .grossura span {
+  width: 10px;
+}
+
+/* O volume abre para dentro, como as dicas. A ponte invisível muda de lado
+   junto, senão o caminho do botão até o cursor fecharia a caixa. */
+#app:not(.trilho-baixo) .trilho .volume-pop {
+  top: 50%;
+  bottom: auto;
+  left: auto;
+  right: calc(100% + 10px);
+  transform: translateY(-50%);
+}
+
+#app:not(.trilho-baixo) .trilho .volume-pop::after {
+  top: 0;
+  bottom: 0;
+  left: 100%;
+  right: auto;
+  width: 12px;
+  height: auto;
+}
+
+/* ---------------------------------------------------------- "mais" do trilho */
+
+/* O que não coube no trilho, com o nome ao lado do ícone — aqui há espaço
+   para ele, e uma lista de ícones soltos seria adivinhação. Abre do lado do
+   botão, só enquanto é usado, como a lista suspensa de um menu. */
+.trilho-menu {
+  position: fixed;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  max-height: calc(100% - 16px);
+  padding: 6px;
+  border-radius: 10px;
+  background: #111214;
+  border: 1px solid var(--line);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+}
+
+.trilho-menu .btn,
+.trilho-menu .tool,
+.trilho-menu .pill,
+.trilho-menu .tile-watchers {
+  justify-content: flex-start;
+  gap: 10px;
+  width: auto;
+  height: 34px;
+  min-width: 0;
+  padding: 0 12px 0 8px;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font: 500 13px/1 inherit;
+}
+
+.trilho-menu .btn:hover:not(:disabled),
+.trilho-menu .tool:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.trilho-menu .btn svg,
+.trilho-menu .tool svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* A dica vira o rótulo: o mesmo texto, no lugar dele. */
+.trilho-menu [data-tip]::after {
+  position: static;
+  order: 1;
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  opacity: 1;
+  transform: none;
+  font: inherit;
+}
+
+.trilho-menu .tool-cores {
+  padding: 6px 8px;
+}
+
+.trilho-menu .cor::after,
+.trilho-menu .grossura::after {
+  content: none;
+}
+
+.trilho-menu .volume-pop {
+  right: calc(100% + 10px);
+  left: auto;
+  top: 50%;
+  bottom: auto;
+  transform: translateY(-50%);
+}
+
+.trilho-menu .hover-list {
+  top: 0;
+  left: auto;
+  right: calc(100% + 8px);
+}
+
 /* -------------------------------------------------------------------- dica */
 
 /* Botão que é só ícone precisa dizer o que faz. O `title` do navegador demora
@@ -1800,22 +2185,12 @@ button {
     display: none;
   }
 
-  .topbar {
-    padding: 8px 8px 0;
-  }
-
-  .bottombar {
+  .trilho {
     padding: 0 8px 8px;
-    gap: 6px;
   }
 
-  .dock {
-    gap: 6px;
-  }
-
-  .group {
-    padding: 4px;
-    gap: 4px;
+  #app:not(.trilho-baixo) .trilho {
+    padding: 8px 8px 8px 0;
   }
 
   .btn {
@@ -1851,6 +2226,25 @@ button {
   .tile-watchers,
   .tile-you {
     display: none;
+  }
+
+  /* Sem a paleta, a barra cabe entre o nome e os botões numa faixa bem mais
+     estreita: uma linha só. Aqui as duas telas vão uma em cima da outra, e
+     cada linha a mais na faixa sai da altura delas. */
+  @container painel (width >= 560px) {
+    .painel-barra {
+      grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    }
+
+    .painel-acoes {
+      grid-column: 3;
+      grid-row: auto;
+    }
+
+    .painel-barra .tools {
+      grid-column: 2;
+      grid-row: auto;
+    }
   }
 }
 
@@ -1905,12 +2299,12 @@ button {
  * no quadro entrou para desenhar, e uma tela de vídeo por baixo só disputaria
  * atenção com o desenho. Sair é o mesmo botão que entrou.
  */
+/* A barra do quadro é a mesma do palco, e mora no trilho como a dela: a folha
+   ocupa a caixa inteira quando a janela tem a forma dela, e uma faixa por
+   cima tirava altura do desenho. */
 .board {
-  flex: 1;
-  min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
   padding: 10px;
 }
 
@@ -1973,14 +2367,6 @@ button {
 
 .board-box.arrastando[data-f='mover'] {
   cursor: grabbing;
-}
-
-/* A barra do quadro é a mesma do palco, numa faixa acima da caixa: a folha
-   ocupa a caixa inteira quando a janela tem a forma dela, e a barra por cima
-   cobria o alto do desenho. */
-.board .tools {
-  flex: 0 0 auto;
-  align-self: center;
 }
 
 /* Ninguém desenhou ainda: dizer isso é melhor que uma folha em branco que não

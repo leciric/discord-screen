@@ -14,11 +14,6 @@
   </head>
   <body>
     <div id="app">
-      <div class="topbar">
-        <div id="people" class="pill" title="Pessoas na sala"></div>
-        <div id="roomPill" class="pill room-pill" hidden></div>
-      </div>
-
       <main id="grid" class="grid"></main>
 
       <!-- Quadro branco da sala. Vive fora da grade de propósito: ele existe
@@ -136,153 +131,209 @@
       </div>
 
       <!-- Barra de controles. Ocupa espaço no layout: não passa por cima da tela -->
-      <div class="bottombar">
-        <div id="panel" class="panel" hidden>
-          <div class="panel-row"><span>Transmitindo</span><strong id="pWho">—</strong></div>
-          <div class="panel-row"><span>Transporte</span><strong id="pVia">—</strong></div>
-          <div class="panel-row"><span>Latência</span><strong id="pLag">—</strong></div>
-          <div class="panel-row"><span>Irregularidade</span><strong id="pJitter">—</strong></div>
-          <div class="panel-row"><span>Quadros</span><strong id="pFps">—</strong></div>
-          <div class="panel-row"><span>Resolução</span><strong id="pRes">—</strong></div>
-          <!--
-            As duas filas do caminho de quem assiste, e o que elas já custaram.
-            Numa transmissão saudável ficam em "0 · 0" e param lá; é o
-            movimento delas que separa "a rede está ruim" de "esta máquina não
-            está dando conta" — e que aponta o relógio da origem quando o
-            número de ressincronizações sobe sozinho.
-          -->
-          <div class="panel-row">
-            <span>Filas (exibir · decodificar)</span><strong id="pFilas">—</strong>
+      <!-- O trilho: todos os controles da sala numa coluna de ícones, ao lado
+           do palco. Nenhum fica sobre a imagem, e a imagem não cede altura a
+           eles — tela compartilhada é larga, e é dos lados que a área sobra.
+           Onde a sobra é em cima e embaixo (a atividade estreita do Discord),
+           o mesmo trilho deita numa linha embaixo da tela: quem escolhe é
+           `arrumarTrilho`, pela forma da área contra a do vídeo. O que não
+           cabe na altura vai para o "mais", na ordem de `data-sobra`. -->
+      <nav id="trilho" class="trilho" aria-label="Controles da sala">
+        <div class="group">
+          <div id="people" class="pill" title="Pessoas na sala"></div>
+          <div
+            id="roomPill"
+            class="pill room-pill"
+            data-sobra="10"
+            data-tip=""
+            aria-label="Sala"
+            hidden
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18" />
+            </svg>
           </div>
-          <div class="panel-row"><span>Ressincronizações</span><strong id="pResync">—</strong></div>
-          <div class="panel-row"><span>Largados</span><strong id="pLargados">—</strong></div>
-          <div class="panel-row"><span>Som</span><strong id="pSom">—</strong></div>
-          <button id="probe" class="panel-btn">Testar captura no iframe</button>
         </div>
 
-        <div class="dock">
-          <div class="group">
-            <button
-              id="share"
-              class="btn"
-              data-tip="Compartilhar tela"
-              aria-label="Compartilhar tela"
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M3 5h18v11H3z" />
-                <path d="M8 20h8" />
-              </svg>
-            </button>
-            <!-- Só com a tela no ar a partir desta página: é o desfazer de ir
-                 ao ar direto, sem prévia — escolher outra tela sem derrubar
-                 quem está assistindo. -->
-            <button id="swap" class="btn" data-tip="Trocar tela" aria-label="Trocar tela" hidden>
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M4 9h13l-3-3" />
-                <path d="M20 15H7l3 3" />
-              </svg>
-            </button>
-            <button id="camera" class="btn" data-tip="Ligar câmera" aria-label="Ligar câmera">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M23 7l-7 5 7 5V7z" />
-                <rect x="1" y="5" width="15" height="14" rx="2" />
-              </svg>
-            </button>
-            <button
-              id="board-toggle"
-              class="btn"
-              data-tip="Quadro branco  ·  Q"
-              aria-label="Quadro branco"
-              hidden
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <rect x="2.5" y="4" width="19" height="13" rx="2" />
-                <path d="M9 21l3-4 3 4" />
-                <path d="M7 12.5l2.6-3.2 2.2 2.6 2-2.4 3.2 4" />
-              </svg>
-            </button>
-          </div>
+        <!-- O que é da tela em destaque (ou do quadro): quem transmite, quem
+             assiste, as ferramentas e os botões dela. Montado pelo render. -->
+        <div id="trilhoTela" class="trilho-tela"></div>
 
-          <div class="group">
-            <div id="volumeBox" class="volume" hidden>
-              <button id="mute" class="btn" data-tip="Silenciar" aria-label="Silenciar">
-                <svg id="muteOn" viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M11 5 6 9H2v6h4l5 4V5z" />
-                  <path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a9 9 0 0 1 0 14" />
-                </svg>
-                <svg id="muteOff" viewBox="0 0 24 24" aria-hidden="true" hidden>
-                  <path d="M11 5 6 9H2v6h4l5 4V5z" />
-                  <path d="M22 9l-6 6M16 9l6 6" />
-                </svg>
-              </button>
+        <div class="group">
+          <button
+            id="share"
+            class="btn"
+            data-tip="Compartilhar tela"
+            aria-label="Compartilhar tela"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M3 5h18v11H3z" />
+              <path d="M8 20h8" />
+            </svg>
+          </button>
+          <!-- Só com a tela no ar a partir desta página: é o desfazer de ir
+               ao ar direto, sem prévia — escolher outra tela sem derrubar
+               quem está assistindo. -->
+          <button
+            id="swap"
+            data-sobra="5"
+            class="btn"
+            data-tip="Trocar tela"
+            aria-label="Trocar tela"
+            hidden
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 9h13l-3-3" />
+              <path d="M20 15H7l3 3" />
+            </svg>
+          </button>
+          <button id="camera" class="btn" data-tip="Ligar câmera" aria-label="Ligar câmera">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M23 7l-7 5 7 5V7z" />
+              <rect x="1" y="5" width="15" height="14" rx="2" />
+            </svg>
+          </button>
+          <button
+            id="board-toggle"
+            data-sobra="9"
+            class="btn"
+            data-tip="Quadro branco  ·  Q"
+            aria-label="Quadro branco"
+            hidden
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="2.5" y="4" width="19" height="13" rx="2" />
+              <path d="M9 21l3-4 3 4" />
+              <path d="M7 12.5l2.6-3.2 2.2 2.6 2-2.4 3.2 4" />
+            </svg>
+          </button>
+        </div>
 
-              <div class="volume-pop">
-                <span id="volumeVal" class="volume-val">100%</span>
-                <input
-                  id="volume"
-                  type="range"
-                  min="0"
-                  max="100"
-                  step="1"
-                  value="100"
-                  aria-label="Volume"
-                />
-              </div>
+        <div class="group">
+          <div id="volumeBox" class="volume" data-sobra="13" hidden>
+            <button id="mute" class="btn" data-tip="Silenciar" aria-label="Silenciar">
+              <svg id="muteOn" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M11 5 6 9H2v6h4l5 4V5z" />
+                <path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a9 9 0 0 1 0 14" />
+              </svg>
+              <svg id="muteOff" viewBox="0 0 24 24" aria-hidden="true" hidden>
+                <path d="M11 5 6 9H2v6h4l5 4V5z" />
+                <path d="M22 9l-6 6M16 9l6 6" />
+              </svg>
+            </button>
+
+            <div class="volume-pop">
+              <span id="volumeVal" class="volume-val">100%</span>
+              <input
+                id="volume"
+                type="range"
+                min="0"
+                max="100"
+                step="1"
+                value="100"
+                aria-label="Volume"
+              />
             </div>
-            <button
-              id="watchSite"
-              class="btn"
-              data-tip="Assistir no site"
-              aria-label="Assistir no site"
-              hidden
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M14 4h6v6M20 4l-8.5 8.5" />
-                <path
-                  d="M18 13.5V19a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 4 19V8a1.5 1.5 0 0 1 1.5-1.5H11"
-                />
-              </svg>
-            </button>
-            <button
-              id="fullscreen"
-              class="btn"
-              data-tip="Tela cheia"
-              aria-label="Tela cheia"
-              hidden
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />
-              </svg>
-            </button>
           </div>
-
-          <div class="group">
-            <button
-              id="roomSettings"
-              class="btn"
-              data-tip="Senha da sala"
-              aria-label="Senha da sala"
-              hidden
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <rect x="4" y="11" width="16" height="10" rx="2" />
-                <path d="M8 11V7a4 4 0 0 1 8 0v4" />
-              </svg>
-            </button>
-            <button
-              id="leaveRoom"
-              class="btn leave"
-              data-tip="Sair da sala"
-              aria-label="Sair da sala"
-              hidden
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-                <path d="M16 17l5-5-5-5M21 12H9" />
-              </svg>
-            </button>
-          </div>
+          <button
+            id="watchSite"
+            data-sobra="2"
+            class="btn"
+            data-tip="Assistir no site"
+            aria-label="Assistir no site"
+            hidden
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M14 4h6v6M20 4l-8.5 8.5" />
+              <path
+                d="M18 13.5V19a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 4 19V8a1.5 1.5 0 0 1 1.5-1.5H11"
+              />
+            </svg>
+          </button>
+          <button id="fullscreen" class="btn" data-tip="Tela cheia" aria-label="Tela cheia" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />
+            </svg>
+          </button>
         </div>
+
+        <div class="group">
+          <button
+            id="roomSettings"
+            data-sobra="1"
+            class="btn"
+            data-tip="Senha da sala"
+            aria-label="Senha da sala"
+            hidden
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="4" y="11" width="16" height="10" rx="2" />
+              <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+            </svg>
+          </button>
+          <button
+            id="leaveRoom"
+            class="btn leave"
+            data-tip="Sair da sala"
+            aria-label="Sair da sala"
+            hidden
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+              <path d="M16 17l5-5-5-5M21 12H9" />
+            </svg>
+          </button>
+        </div>
+
+        <button
+          id="trilhoMais"
+          class="btn"
+          data-tip="Mais"
+          aria-label="Mais controles"
+          aria-controls="trilhoMenu"
+          aria-expanded="false"
+          hidden
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="5" r="1.2" />
+            <circle cx="12" cy="12" r="1.2" />
+            <circle cx="12" cy="19" r="1.2" />
+          </svg>
+        </button>
+      </nav>
+
+      <!-- Os controles que não couberam no trilho, com o nome ao lado do
+           ícone. Abre do lado do botão "mais", e só enquanto é usado. -->
+      <div
+        id="trilhoMenu"
+        class="trilho-menu"
+        role="group"
+        aria-label="Mais controles"
+        hidden
+      ></div>
+
+      <!-- Diagnóstico (Ctrl+Shift+D): fica no canto, perto do trilho. -->
+      <div id="panel" class="panel" hidden>
+        <div class="panel-row"><span>Transmitindo</span><strong id="pWho">—</strong></div>
+        <div class="panel-row"><span>Transporte</span><strong id="pVia">—</strong></div>
+        <div class="panel-row"><span>Latência</span><strong id="pLag">—</strong></div>
+        <div class="panel-row"><span>Irregularidade</span><strong id="pJitter">—</strong></div>
+        <div class="panel-row"><span>Quadros</span><strong id="pFps">—</strong></div>
+        <div class="panel-row"><span>Resolução</span><strong id="pRes">—</strong></div>
+        <!--
+          As duas filas do caminho de quem assiste, e o que elas já custaram.
+          Numa transmissão saudável ficam em "0 · 0" e param lá; é o
+          movimento delas que separa "a rede está ruim" de "esta máquina não
+          está dando conta" — e que aponta o relógio da origem quando o
+          número de ressincronizações sobe sozinho.
+        -->
+        <div class="panel-row">
+          <span>Filas (exibir · decodificar)</span><strong id="pFilas">—</strong>
+        </div>
+        <div class="panel-row"><span>Ressincronizações</span><strong id="pResync">—</strong></div>
+        <div class="panel-row"><span>Largados</span><strong id="pLargados">—</strong></div>
+        <div class="panel-row"><span>Som</span><strong id="pSom">—</strong></div>
+        <button id="probe" class="panel-btn">Testar captura no iframe</button>
       </div>
 
       <div id="profileModal" class="modal" hidden>

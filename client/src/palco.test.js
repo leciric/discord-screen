@@ -14,6 +14,7 @@ import {
   promover,
   telasNoPalco,
   tirarDoPalco,
+  trilhoEmBaixo,
 } from './palco.js';
 
 describe('telasNoPalco', () => {
@@ -202,5 +203,36 @@ describe('divisaoNoPonteiro', () => {
   it('arrastar para fora do palco prende no limite', () => {
     expect(divisaoNoPonteiro(-500, 100, 1010, 10)).toBeCloseTo(PAINEL_MIN_PX / 1000);
     expect(divisaoNoPonteiro(5000, 100, 1010, 10)).toBeCloseTo(1 - PAINEL_MIN_PX / 1000);
+  });
+});
+
+describe('trilhoEmBaixo', () => {
+  const t = (largura, altura, proporcao = 16 / 9, espessura = 46) =>
+    trilhoEmBaixo({ largura, altura, proporcao, espessura });
+
+  it('tela 16:9 numa área deitada: o trilho vai para a lateral', () => {
+    expect(t(1440, 810)).toBe(false);
+    expect(t(1920, 1080)).toBe(false);
+    // Mais larga que 16:9: a sobra dos lados engole o trilho inteiro.
+    expect(t(1440, 700)).toBe(false);
+  });
+
+  it('área em pé, como a atividade estreita: o trilho vai para baixo', () => {
+    expect(t(420, 760)).toBe(true);
+    expect(t(604, 884)).toBe(true);
+  });
+
+  it('decide pela forma do conteúdo, não só pela da janela', () => {
+    // Área deitada, mas duas telas empilhadas pedem altura: a sobra é dos lados.
+    expect(t(1000, 800, 16 / 18)).toBe(false);
+    // Área deitada e mais estreita que o conteúdo: a sobra é embaixo.
+    expect(t(1000, 800, 32 / 9)).toBe(true);
+    // Tela em pé (celular transmitindo) numa área deitada: lateral, com folga.
+    expect(t(1440, 810, 9 / 16)).toBe(false);
+  });
+
+  it('sem medida ainda, segue a forma da área', () => {
+    expect(t(1440, 810, 0)).toBe(false);
+    expect(t(420, 760, NaN)).toBe(true);
   });
 });

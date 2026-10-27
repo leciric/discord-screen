@@ -13,6 +13,7 @@ import {
   promover,
   telasNoPalco,
   tirarDoPalco,
+  trilhoEmBaixo,
 } from './palco.js';
 import { createBroadcaster } from '../../shared/broadcaster.js';
 import { criarCamada, conter, paraGrade, CORES, ESPESSURAS } from '../../shared/anotacoes.js';
@@ -83,7 +84,7 @@ let volume = Math.min(1, Math.max(0, Number(read('volume') ?? 1)));
 /**
  * Volume de cada pessoa, separado do volume geral.
  *
- * Como no Discord: o cursor do dock é o volume de tudo, e cada transmissão tem
+ * Como no Discord: o cursor do trilho é o volume de tudo, e cada transmissão tem
  * o seu, guardado por pessoa e não por sessão — quem sempre chega alto demais
  * continua ajustado amanhã. O que sai no alto-falante é o produto dos dois.
  */
@@ -310,8 +311,8 @@ function unwatchSlot(slot) {
  * Troca quem está no palco e larga o que só estava sendo assistido para ele.
  *
  * Não redesenha: quem chama pode estar dentro do renderGrid, e é ele quem sabe
- * a hora. Devolve se alguma tela foi largada, porque aí a barra de baixo também
- * muda — o controle de som some junto com o último áudio.
+ * a hora. Devolve se alguma tela foi largada, porque aí o trilho também muda —
+ * o controle de som some junto com o último áudio.
  */
 function mudarPalco(novo) {
   activeSlot = novo.ativo;
@@ -426,12 +427,15 @@ divider.title = 'Arraste para redimensionar · duplo clique restaura';
 function applyStrip() {
   // O teto acompanha a janela: uma largura guardada grande demais engoliria o
   // palco depois de alguém encolher o Discord.
+  //
+  // Com o trilho em pé, ele é a borda de fora da lateral: a largura guardada é
+  // a dos dois juntos, e a coluna das miniaturas fica com o resto. Assim o
+  // trilho não tira um pixel do palco — o palco tem a largura que tinha
+  // quando as barras flutuavam sobre ele.
   const max = Math.max(STRIP_MIN, $('grid').clientWidth * 0.45);
-  const largura = `${Math.round(Math.min(max, stripW))}px`;
-  $('grid').style.setProperty('--strip', largura);
-  // Também no #app: a barra de controles é irmã da grade, não filha, e precisa
-  // da mesma medida para se centrar no palco em vez de na janela.
-  $('app').style.setProperty('--strip', largura);
+  const trilho = $('app').classList.contains('trilho-baixo') ? 0 : $('trilho').offsetWidth;
+  const largura = Math.round(Math.min(max, stripW) - trilho);
+  $('grid').style.setProperty('--strip', `${Math.max(STRIP_MIN - ESPESSURA_TRILHO, largura)}px`);
 }
 
 function setStrip(px) {
@@ -448,8 +452,12 @@ divider.addEventListener('pointerdown', (e) => {
 
   // Os ouvintes vão na janela, não no divisor: a grade é reconstruída a cada
   // mudança de estado da sala, e o arrasto não pode morrer no meio disso.
-  // 21px = os 16 de padding da grade mais a meia largura do divisor.
-  const move = (ev) => setStrip($('grid').getBoundingClientRect().right - ev.clientX - 21);
+  // 21px = os 16 de padding da grade mais a meia largura do divisor. O trilho
+  // em pé entra na conta porque a largura guardada é a da lateral com ele.
+  const move = (ev) => {
+    const trilho = $('app').classList.contains('trilho-baixo') ? 0 : $('trilho').offsetWidth;
+    setStrip($('grid').getBoundingClientRect().right - ev.clientX - 21 + trilho);
+  };
   const up = () => {
     divider.classList.remove('dragging');
     window.removeEventListener('pointermove', move);
@@ -549,6 +557,211 @@ barraDivisao.addEventListener('pointerdown', (e) => {
 
 barraDivisao.addEventListener('dblclick', () => setDivisao(DIVISAO_PADRAO));
 
+// ------------------------------------------------------------------ trilho
+
+/**
+ * O trilho de controles: tudo o que era das barras de cima e de baixo, e a
+ * faixa da tela em destaque, numa coluna de ícones ao lado do palco.
+ *
+ * As barras flutuando cobriam a imagem; em faixas próprias, em cima e embaixo,
+ * elas tiravam altura de uma tela que já é larga — e altura é justamente o que
+ * falta a ela. Ao lado, o trilho mora na sobra que a forma do vídeo deixa. Com
+ * a lateral aberta ele sai da largura dela, e não da do palco (`applyStrip`).
+ *
+ * Onde a sobra é em cima e embaixo — a atividade estreita do Discord, um
+ * monitor em pé —, o mesmo trilho deita numa linha embaixo da tela. Quem
+ * decide é `trilhoEmBaixo`, pela forma da área contra a do que se mostra.
+ */
+const ESPESSURA_TRILHO = 46;
+
+function arrumarTrilho() {
+  const app = $('app');
+  const grid = $('grid');
+  const sidebar = grid.hidden ? null : grid.querySelector(':scope > .sidebar');
+  const comLateral = Boolean(sidebar?.offsetWidth);
+
+  let emBaixo;
+  if (comLateral) {
+    // A lateral paga a largura do trilho: na coluna ele nunca custa nada.
+    emBaixo = false;
+  } else {
+    const area = noQuadro ? $('board') : grid;
+    const css = getComputedStyle(area);
+    const largura = app.clientWidth - parseFloat(css.paddingLeft) - parseFloat(css.paddingRight);
+    const altura = app.clientHeight - parseFloat(css.paddingTop) - parseFloat(css.paddingBottom);
+    emBaixo = trilhoEmBaixo({
+      largura,
+      altura,
+      proporcao: proporcaoDoPalco(largura, altura),
+      espessura: ESPESSURA_TRILHO,
+    });
+  }
+
+  if (app.classList.contains('trilho-baixo') !== emBaixo) {
+    app.classList.toggle('trilho-baixo', emBaixo);
+    // A lateral desconta o trilho só quando ele está em pé ao lado dela.
+    if (comLateral || grid.classList.contains('palco')) applyStrip();
+  }
+  acomodarTrilho();
+}
+
+/** Largura sobre altura do que o palco mostra agora. Zero se não se sabe. */
+function proporcaoDoPalco(largura, altura) {
+  if (noQuadro || activeSlot === null) return FOLHA_W / FOLHA_H;
+  const s = streams.get(activeSlot);
+  const m = s ? medidaDe(s) : null;
+  if (!m?.w || !m?.h) return 0;
+  const r = m.w / m.h;
+  if (ladoSlot === null) return r;
+  // Duas telas: lado a lado na área deitada, uma em cima da outra na em pé —
+  // a mesma regra do `@container` de `.palco-paineis`.
+  return largura >= altura ? r * 2 : r / 2;
+}
+
+/**
+ * Manda para o "mais" o que não cabe no trilho, e traz de volta o que voltou
+ * a caber. Sai primeiro o que menos se usa (`data-sobra`, menor primeiro); o
+ * que nunca sai não tem a marca — compartilhar, as ferramentas de apontar e
+ * desenhar, a tela cheia e o sair.
+ *
+ * Os nós mudam de lugar inteiros, com ouvintes e ids: quem os atualiza não
+ * precisa saber onde eles estão. No lugar de cada um fica um comentário, que
+ * é por onde ele volta.
+ */
+let guardadosNoMais = [];
+
+function acomodarTrilho() {
+  const trilho = $('trilho');
+  const menu = $('trilhoMenu');
+  vigiaDoTrilho.disconnect();
+  // Um render com o menu aberto (alguém entrou, a contagem mudou) não pode
+  // fechá-lo na cara de quem está escolhendo.
+  const aberto = !menu.hidden;
+
+  for (const { el, marca } of guardadosNoMais) {
+    if (marca.isConnected) marca.replaceWith(el);
+    else el.remove();
+  }
+  guardadosNoMais = [];
+  fecharMaisDoTrilho();
+  $('trilhoMais').hidden = true;
+  trilho.classList.remove('quebra');
+
+  const emBaixo = $('app').classList.contains('trilho-baixo');
+  const transborda = () =>
+    emBaixo
+      ? trilho.scrollWidth > trilho.clientWidth + 1
+      : trilho.scrollHeight > trilho.clientHeight + 1;
+
+  if (transborda()) {
+    $('trilhoMais').hidden = false;
+    const candidatos = [...trilho.querySelectorAll('[data-sobra]')]
+      .filter((el) => !el.hidden)
+      .map((el, ordem) => ({ el, ordem, sobra: Number(el.dataset.sobra) }))
+      .sort((a, b) => a.sobra - b.sobra || a.ordem - b.ordem);
+
+    // Os da mesma prioridade saem juntos: o zoom pela metade, ou o desfazer
+    // sem o apagar, deixaria um grupo partido em dois lugares.
+    for (let i = 0; i < candidatos.length && transborda();) {
+      const sobra = candidatos[i].sobra;
+      for (; i < candidatos.length && candidatos[i].sobra === sobra; i++) {
+        const { el } = candidatos[i];
+        const marca = document.createComment('mais');
+        el.replaceWith(marca);
+        guardadosNoMais.push({ el, marca });
+      }
+    }
+    // Nem com tudo o que pode sair fora ele coube: quebra em duas linhas (ou
+    // colunas). É o caso da atividade bem estreita, onde a sobra em cima e
+    // embaixo da tela é grande — a segunda linha sai dela, não da imagem.
+    if (transborda()) trilho.classList.add('quebra');
+
+    // No menu, na ordem em que estavam no trilho.
+    menu.replaceChildren(
+      ...guardadosNoMais
+        .slice()
+        .sort((a, b) =>
+          a.marca.compareDocumentPosition(b.marca) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+        )
+        .map((g) => g.el),
+    );
+  } else {
+    menu.replaceChildren();
+  }
+
+  if (aberto && guardadosNoMais.length) abrirMaisDoTrilho();
+  vigiar();
+}
+
+/** Botão que aparece ou some muda o que cabe: o trilho se refaz sozinho. */
+let refazerTrilho = 0;
+const vigiaDoTrilho = new MutationObserver((mudancas) => {
+  // Abrir e fechar o menu não muda o que cabe no trilho.
+  if (mudancas.every((m) => m.target === $('trilhoMenu'))) return;
+  cancelAnimationFrame(refazerTrilho);
+  refazerTrilho = requestAnimationFrame(acomodarTrilho);
+});
+
+function vigiar() {
+  for (const el of [$('trilho'), $('trilhoMenu')]) {
+    vigiaDoTrilho.observe(el, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ['hidden'],
+    });
+  }
+}
+
+function abrirMaisDoTrilho() {
+  const menu = $('trilhoMenu');
+  const r = $('trilhoMais').getBoundingClientRect();
+  // Ao lado do botão, para dentro da janela: à esquerda do trilho em pé, e
+  // acima dele deitado.
+  if ($('app').classList.contains('trilho-baixo')) {
+    menu.style.right = `${Math.max(8, innerWidth - r.right)}px`;
+    menu.style.bottom = `${innerHeight - r.top + 8}px`;
+  } else {
+    menu.style.right = `${innerWidth - r.left + 8}px`;
+    menu.style.bottom = `${Math.max(8, innerHeight - r.bottom)}px`;
+  }
+  menu.hidden = false;
+  $('trilhoMais').setAttribute('aria-expanded', 'true');
+  $('trilhoMais').classList.add('on');
+}
+
+function fecharMaisDoTrilho() {
+  $('trilhoMenu').hidden = true;
+  $('trilhoMais').setAttribute('aria-expanded', 'false');
+  $('trilhoMais').classList.remove('on');
+}
+
+$('trilhoMais').addEventListener('click', () => {
+  if ($('trilhoMenu').hidden) abrirMaisDoTrilho();
+  else fecharMaisDoTrilho();
+});
+
+// Fora do menu e do botão, o clique fecha. Um clique dentro dele não: o
+// volume, a paleta e o zoom são ajustados aos poucos, mais de um clique.
+document.addEventListener('pointerdown', (e) => {
+  if ($('trilhoMenu').hidden) return;
+  if ($('trilhoMenu').contains(e.target) || $('trilhoMais').contains(e.target)) return;
+  fecharMaisDoTrilho();
+});
+
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !$('trilhoMenu').hidden) fecharMaisDoTrilho();
+});
+
+window.addEventListener('resize', arrumarTrilho);
+vigiar();
+
+/** O nome da sala mora na dica: no trilho só cabe o ícone. */
+function nomearSala(nome) {
+  $('roomPill').dataset.tip = nome;
+  $('roomPill').setAttribute('aria-label', `Sala: ${nome}`);
+}
+
 /**
  * Duas formas de mostrar a sala, e o que decide é ter alguém transmitindo.
  *
@@ -558,6 +771,13 @@ barraDivisao.addEventListener('dblclick', () => setDivisao(DIVISAO_PADRAO));
  * quem está junto, e é a call que se perde nisso.
  */
 function renderGrid() {
+  montarGrade();
+  // Depois da grade, e em todo caminho dela: é o que está no palco que diz
+  // onde o trilho cabe sem tirar nada da imagem.
+  arrumarTrilho();
+}
+
+function montarGrade() {
   // Um gesto em andamento não pode ser interrompido por uma mudança de estado
   // da sala: a grade é refeita do zero, o tile do palco é outro nó, e tirar a
   // superfície do DOM no meio do caminho solta a captura do ponteiro — o traço
@@ -570,9 +790,10 @@ function renderGrid() {
 
   // A barra é refeita a cada render, junto do tile do palco. Zerar aqui evita
   // que a referência sobreviva ao tile que a continha — sem palco não há barra.
+  // O pedaço do trilho que é da tela vai junto: ele é a faixa daquele tile.
   barras = [];
   alvoQuadroAtual = null;
-  $('board').querySelector(':scope > .tools')?.remove();
+  $('trilhoTela').replaceChildren();
 
   const grid = $('grid');
 
@@ -602,10 +823,11 @@ function renderGrid() {
     $('fullscreen').hidden = true;
     $('watchSite').hidden = true;
     $('people').hidden = false;
-    // Acima da folha, e não sobre ela: a barra é do quadro, não do desenho.
+    // No trilho, e não sobre a folha: a barra é do quadro, não do desenho, e
+    // a folha fica com a altura inteira.
     if (!barras.some((b) => b.alvo === alvoQuadroAtual)) {
       alvoQuadroAtual = alvoDoQuadro();
-      $('board').prepend(buildFerramentas(alvoQuadroAtual));
+      $('trilhoTela').append(buildFerramentas(alvoQuadroAtual));
     }
     return;
   }
@@ -696,9 +918,8 @@ function renderGrid() {
   grid.classList.toggle('palco', noPalco);
   grid.classList.toggle('cheia', noPalco && telaCheia);
 
-  // Com a lateral no ar, a contagem no topo repete o que está logo ali — e
-  // custa uma faixa inteira de altura, que é o que falta para a tela. Vazia, a
-  // barra de cima se recolhe sozinha.
+  // Com a lateral no ar, a contagem no trilho repete o que está logo ali, e
+  // é um botão a menos disputando a altura dele.
   $('people').hidden = noPalco && !telaCheia;
 
   // Os canvas são reanexados abaixo; removê-los daqui não perde o conteúdo.
@@ -718,7 +939,16 @@ function renderGrid() {
   const tileDoPalco = (slot) => buildTile(donoDe(slot), { palco: true, slot }).el;
 
   if (ladoSlot === null) {
-    grid.append(tileDoPalco(activeSlot));
+    // Uma tela só: a faixa dela sai de cima da imagem e vai para o trilho, que
+    // mora na sobra da lateral. Em cima, ela custava à imagem a altura que é
+    // justamente o que falta a uma tela larga.
+    const painel = tileDoPalco(activeSlot);
+    const faixa = painel.querySelector(':scope > .painel-barra');
+    if (faixa) {
+      $('trilhoTela').append(faixa);
+      painel.classList.add('sem-faixa');
+    }
+    grid.append(painel);
   } else {
     // Duas telas dividindo a área do palco, cada uma com o seu canvas — que é
     // único, e por isso as duas nunca aparecem também na lateral. A caixa de
@@ -858,11 +1088,14 @@ function buildTile(p, { palco = false, semVideo = false, slot: slotDado = null }
     tile.style.aspectRatio = `${medida.w} / ${medida.h}`;
   }
 
-  // Tela tem faixa própria, acima da imagem, e é nela que mora tudo o que não
+  // Tela tem faixa própria, fora da imagem, e é nela que mora tudo o que não
   // é a imagem: quem transmite, quem assiste, as ferramentas e os botões. Por
   // cima do vídeo cada cápsula escondia um pedaço do que se veio ver, e quem
   // assiste pediu exatamente isso: nada em cima da tela. O que continua sobre
   // ela é o que é dela — os traços, o laser e o aviso de que a imagem não vem.
+  //
+  // A faixa nasce acima da imagem, e é ali que ela fica no palco dividido. Com
+  // uma tela só, o renderGrid a leva para o trilho, ao lado do palco.
   //
   // Avatar não tem faixa: ali não há imagem para cobrir, e o nome no rodapé
   // do quadro é o mesmo da call.
@@ -916,7 +1149,7 @@ function buildTile(p, { palco = false, semVideo = false, slot: slotDado = null }
 
     // Nada de "parar de assistir" na prévia da própria captura: não há o que
     // parar, ela não veio pela rede. Quem quer parar usa o botão de encerrar a
-    // transmissão, que é outra coisa e mora no dock.
+    // transmissão, que é outra coisa e mora no trilho.
     if (!stream.local) {
       // Botão direito para largar a tela, sem precisar caçar controle.
       tile.addEventListener('contextmenu', (e) => {
@@ -954,6 +1187,14 @@ function buildTile(p, { palco = false, semVideo = false, slot: slotDado = null }
     badge.append(dot);
   }
   badge.append(document.createTextNode(p.name));
+  if (faixa) {
+    // No trilho não cabe o nome: fica a foto, e o nome vai para a dica — que
+    // diz também o que a faixa mostrava ao lado dele.
+    const camera = available.get(slot)?.fonte === 'camera';
+    const dica = `${camera ? 'Câmera de ' : ''}${p.name}${isMe ? ' (você)' : ''}`;
+    badge.dataset.tip = dica;
+    badge.prepend(buildAvatar(p));
+  }
 
   let you = null;
   if (isMe) {
@@ -1073,6 +1314,7 @@ function buildWatchers(slot) {
 
   const badge = document.createElement('div');
   badge.className = 'tile-watchers';
+  badge.dataset.sobra = '12';
   badge.innerHTML =
     '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>' +
     '<circle cx="12" cy="7" r="4"/></svg>';
@@ -1364,7 +1606,7 @@ function buildAvatar(p) {
 }
 
 /**
- * Quem está na sala, listado na pílula do topo.
+ * Quem está na sala, listado na pílula do trilho.
  *
  * Com telas no ar a grade passa a ser delas, então é aqui que ainda dá para ver
  * a sala inteira — inclusive quem só assiste.
@@ -2378,9 +2620,9 @@ const distancia = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 /**
  * Ferramentas da tela em destaque.
  *
- * Flutua sobre o palco em vez de morar no dock de baixo: o que ela controla
- * está ali, e um controle a uma tela de distância do que ele altera é um
- * controle que ninguém acha.
+ * Mora com a tela que ela controla — na faixa dela no palco dividido, no
+ * trilho ao lado dela com uma tela só ou no quadro —, e não num canto qualquer
+ * da sala: um controle longe do que ele altera é um controle que ninguém acha.
  */
 //
 // Uma por tela do palco: com duas lado a lado cada painel tem a sua, porque o
@@ -2480,6 +2722,14 @@ function buildFerramentas(alvo) {
   el.append(cores);
   el.append(separador());
 
+  // O que pode ir para o "mais" quando o trilho não comporta a barra inteira,
+  // na ordem em que sai (ver acomodarTrilho). Apontar e desenhar ficam sempre.
+  const sobra = (el, n) => {
+    el.dataset.sobra = String(n);
+    return el;
+  };
+  sobra(cores, 11);
+
   el.append(
     criar('esconder', 'Esconder os desenhos  ·  O', ICONES.olho, () => alternarTracos()),
     criar('desfazer', 'Desfazer meu último traço  ·  Ctrl+Z', ICONES.desfazer, () =>
@@ -2500,6 +2750,12 @@ function buildFerramentas(alvo) {
     );
   }
 
+  sobra(botoes.esconder, 7);
+  sobra(botoes.desfazer, 6);
+  sobra(botoes.apagar, 6);
+  sobra(botoes.apagarTudo, 4);
+  if (botoes.flutuar) sobra(botoes.flutuar, 3);
+
   el.append(separador());
 
   const menos = criar('menos', 'Afastar  ·  −', ICONES.menos, () =>
@@ -2515,7 +2771,7 @@ function buildFerramentas(alvo) {
     alvo.definirZoom(alvo.zoomAtual() * 1.4),
   );
 
-  el.append(menos, nivel, mais);
+  el.append(sobra(menos, 8), sobra(nivel, 8), sobra(mais, 8));
 
   barras.push({ el, botoes, cores, swatches, grossuras, nivel, alvo });
   sincronizarBarra();
@@ -3669,7 +3925,7 @@ async function showLobby() {
   $('share').hidden = true;
   $('camera').hidden = true;
 
-  // O dock inteiro sai de cena: todo controle dele é de dentro da sala, e o
+  // O trilho inteiro sai de cena: todo controle dele é de dentro da sala, e o
   // cabeçalho do lobby já traz perfil e criar sala.
   $('fullscreen').hidden = true;
   $('panel').hidden = true;
@@ -3898,7 +4154,7 @@ function openRoom(tokens, room) {
 
   clearInterval(lobbyTimer);
   lobbyTimer = null;
-  $('roomPill').textContent = room.name;
+  nomearSala(room.name);
 
   setEmpty('Entrando…', room.name);
   connect();
@@ -4193,8 +4449,7 @@ function connect() {
       lastRoomState = msg.room ?? null;
 
       // A senha da sala só aparece para quem a criou.
-      $('roomPill').textContent =
-        `${lastRoomState?.locked ? '🔒 ' : ''}${lastRoomState?.name ?? ''}`;
+      nomearSala(`${lastRoomState?.locked ? '🔒 ' : ''}${lastRoomState?.name ?? ''}`);
       $('roomSettings').hidden = lastRoomState?.ownerId !== session?.user?.id;
       $('roomSettings').classList.toggle('on', Boolean(lastRoomState?.locked));
 
