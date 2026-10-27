@@ -101,11 +101,13 @@ body {
   gap: 0;
 }
 
-/* O palco tem a forma do vídeo (posta em linha pelo render) e fica centrado na
-   área disponível. As sobras viram fundo da grade, não um retângulo preto com
-   borda verde em volta de nada. */
+/* O palco tem a forma do vídeo (posta em linha pelo render). As sobras viram
+   fundo da grade, não um retângulo preto com borda verde em volta de nada.
+   Centrado na largura, mas encostado no alto: a faixa da tela fica logo acima
+   dela, e centrar na altura abria um vão entre o nome e a imagem — as duas
+   pareciam coisas separadas. */
 .tile-palco[style*='aspect-ratio'] {
-  place-self: center;
+  place-self: start center;
   width: 100%;
   height: auto;
   max-width: 100%;
@@ -332,9 +334,11 @@ body {
     padding: 0 5px;
   }
 
-  /* O mesmo corte da janela estreita: a cor escolhida continua valendo. */
+  /* O mesmo corte da janela estreita: a cor escolhida continua valendo. A
+     contagem de quem assiste sai junto, para o nome não virar duas letras. */
   .painel .tool-cores,
-  .painel .tool-sep {
+  .painel .tool-sep,
+  .painel .tile-watchers {
     display: none;
   }
 }
