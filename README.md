@@ -306,7 +306,7 @@ lateral some, e ele continua lá).
   neste navegador e vale para as próximas vezes, sem mudar nada para quem mais
   está assistindo.
 
-  ![Palco dividido com a barra arrastada: a tela ocupa a maior parte, e a câmera fica com o resto](docs/palco-dividido-barra.png)
+  ![Palco dividido com a barra arrastada: uma tela ocupa a maior parte e a outra fica com o resto, cada uma com a sua faixa de nome, ferramentas e botões acima da imagem](docs/palco-dividido-barra.png)
 
 - Cada tela tem a **sua** faixa, com a **sua** barra de ferramentas, e o
   **seu** zoom: aproximar uma

@@ -1214,8 +1214,9 @@ button {
   white-space: nowrap;
 }
 
-/* Encostado embaixo, como a barra de controles de uma call. O respiro menor
-   embaixo do que em cima é de propósito: a barra pertence à borda da tela. */
+/* Fundo em --tile, como a contagem da lateral: a pílula mora na faixa da
+   barra de cima, sobre o preto da página, e o preto translúcido de quando ela
+   flutuava sobre o vídeo sumia ali. */
 .pill {
   position: relative;
   display: inline-flex;
@@ -1223,8 +1224,7 @@ button {
   gap: 7px;
   padding: 7px 13px;
   border-radius: 999px;
-  background: rgba(0, 0, 0, 0.65);
-  backdrop-filter: blur(8px);
+  background: var(--tile);
   color: var(--text);
   font-size: 13px;
   font-weight: 500;
