@@ -572,7 +572,7 @@ function renderGrid() {
   // que a referência sobreviva ao tile que a continha — sem palco não há barra.
   barras = [];
   alvoQuadroAtual = null;
-  $('boardBox').querySelector('.tools')?.remove();
+  $('board').querySelector(':scope > .tools')?.remove();
 
   const grid = $('grid');
 
@@ -585,7 +585,6 @@ function renderGrid() {
     $('empty').hidden = true;
     $('fullscreen').hidden = true;
     $('watchSite').hidden = true;
-    $('app').classList.remove('cheia', 'flutua', 'palco');
     return;
   }
 
@@ -603,11 +602,10 @@ function renderGrid() {
     $('fullscreen').hidden = true;
     $('watchSite').hidden = true;
     $('people').hidden = false;
-    $('app').classList.remove('cheia', 'palco');
-    $('app').classList.add('flutua');
+    // Acima da folha, e não sobre ela: a barra é do quadro, não do desenho.
     if (!barras.some((b) => b.alvo === alvoQuadroAtual)) {
       alvoQuadroAtual = alvoDoQuadro();
-      $('boardBox').append(buildFerramentas(alvoQuadroAtual));
+      $('board').prepend(buildFerramentas(alvoQuadroAtual));
     }
     return;
   }
@@ -679,18 +677,6 @@ function renderGrid() {
 
   const noPalco = activeSlot !== null;
   $('fullscreen').hidden = !noPalco;
-  // A classe vai no #app, e não na grade: quem sai do layout são as barras, que
-  // são irmãs dela. Fica acima do `return` de sala vazia — senão as barras
-  // continuariam flutuando sobre o painel de "ninguém na sala".
-  $('app').classList.toggle('cheia', noPalco && telaCheia);
-  // Dentro da sala as barras sempre flutuam, tendo transmissão ou não: a barra
-  // não deve pular de lugar quando alguém começa a transmitir, e um dock que
-  // muda de posição sozinho é a mesma barra parecendo duas.
-  $('app').classList.add('flutua');
-  // Sumir por ócio, porém, só faz sentido com imagem embaixo — é a imagem que
-  // se quer descobrir. Sobre uma grade de avatares o sumiço não revelaria nada
-  // e só faria os controles parecerem quebrados.
-  $('app').classList.toggle('palco', noPalco);
   $('fullscreen').classList.toggle('on', telaCheia);
   // A dica e o nome acessível andam juntos: o botão faz duas coisas conforme o
   // estado, e anunciar sempre a mesma coisa mentiria para quem usa leitor.
@@ -872,13 +858,30 @@ function buildTile(p, { palco = false, semVideo = false, slot: slotDado = null }
     tile.style.aspectRatio = `${medida.w} / ${medida.h}`;
   }
 
+  // Tela tem faixa própria, acima da imagem, e é nela que mora tudo o que não
+  // é a imagem: quem transmite, quem assiste, as ferramentas e os botões. Por
+  // cima do vídeo cada cápsula escondia um pedaço do que se veio ver, e quem
+  // assiste pediu exatamente isso: nada em cima da tela. O que continua sobre
+  // ela é o que é dela — os traços, o laser e o aviso de que a imagem não vem.
+  //
+  // Avatar não tem faixa: ali não há imagem para cobrir, e o nome no rodapé
+  // do quadro é o mesmo da call.
+  const faixa = slot !== null ? document.createElement('div') : null;
+  const quem = document.createElement('div');
+  const acoes = document.createElement('div');
+  if (faixa) {
+    faixa.className = 'painel-barra';
+    quem.className = 'painel-quem';
+    acoes.className = 'painel-acoes';
+  }
+
   // Sem rótulo, dois tiles da mesma pessoa lado a lado no grid não se
   // distinguem até alguém clicar em um deles.
   if (slot !== null && available.get(slot)?.fonte === 'camera') {
     const marca = document.createElement('span');
     marca.className = 'tile-fonte';
     marca.textContent = 'Câmera';
-    tile.append(marca);
+    quem.append(marca);
   }
 
   const aoClicar = () => {
@@ -893,11 +896,12 @@ function buildTile(p, { palco = false, semVideo = false, slot: slotDado = null }
   // Dividir e voltar a uma tela só. Vale também para o convite: pôr do lado uma
   // tela que ainda não se assiste é pedir para assisti-la.
   const lado = slot !== null ? buildBotaoLado(slot, palco) : null;
-  if (lado) tile.append(lado);
+  if (lado) acoes.append(lado);
 
+  let ferramentas = null;
   if (stream) {
     tile.append(noDe(stream));
-    if (palco) tile.append(buildFerramentas(alvoDoPalco(slot)));
+    if (palco) ferramentas = buildFerramentas(alvoDoPalco(slot));
     // Só na lateral. No palco a dica seguia o cursor pela imagem inteira e
     // aparecia por cima justamente de onde se está desenhando ou apontando —
     // e ninguém precisa que lhe expliquem a tela que veio ver. Na lateral ela
@@ -932,7 +936,7 @@ function buildTile(p, { palco = false, semVideo = false, slot: slotDado = null }
         e.stopPropagation();
         unwatchSlot(slot);
       });
-      tile.append(stop);
+      acoes.append(stop);
     }
   } else if (slot !== null) {
     // O convite tem botão próprio, que para o clique antes de chegar no tile.
@@ -942,9 +946,6 @@ function buildTile(p, { palco = false, semVideo = false, slot: slotDado = null }
     tile.append(buildAvatar(p));
   }
 
-  const footer = document.createElement('div');
-  footer.className = 'tile-footer';
-
   const badge = document.createElement('div');
   badge.className = 'tile-name';
   if (p.broadcasting) {
@@ -953,19 +954,33 @@ function buildTile(p, { palco = false, semVideo = false, slot: slotDado = null }
     badge.append(dot);
   }
   badge.append(document.createTextNode(p.name));
-  footer.append(badge);
 
-  if (slot !== null) footer.append(buildWatchers(slot));
-  tile.append(footer);
-
+  let you = null;
   if (isMe) {
-    const you = document.createElement('span');
+    you = document.createElement('span');
     you.className = 'tile-you';
     you.textContent = 'você';
-    tile.append(you);
   }
 
-  return { el: tile, slot };
+  if (!faixa) {
+    const footer = document.createElement('div');
+    footer.className = 'tile-footer';
+    footer.append(badge);
+    tile.append(footer);
+    if (you) tile.append(you);
+    return { el: tile, slot };
+  }
+
+  quem.append(badge, buildWatchers(slot));
+  if (you) quem.append(you);
+  faixa.append(quem);
+  if (ferramentas) faixa.append(ferramentas);
+  faixa.append(acoes);
+
+  const painel = document.createElement('div');
+  painel.className = palco ? 'painel painel-palco' : 'painel';
+  painel.append(faixa, tile);
+  return { el: painel, slot };
 }
 
 /** Espera pelo primeiro quadro. Sai sozinha quando o decoder desenha. */
@@ -1159,9 +1174,6 @@ function buildBotaoLado(slot, palco) {
   const b = document.createElement('button');
   b.type = 'button';
   b.className = 'tile-lado';
-  // O botão de parar ocupa o canto quando existe; sem ele, este vai para lá.
-  const stream = streams.get(slot);
-  if (stream && !stream.local) b.classList.add('com-parar');
   b.dataset.tip = rotulo;
   b.setAttribute('aria-label', rotulo);
   b.innerHTML = icone;
@@ -2564,17 +2576,6 @@ function sincronizarUmaBarra(barra) {
   mostrarZoomEm(barra);
 }
 
-/**
- * A barra some quase toda quando não está em uso — a tela é o que importa —, e
- * fica firme enquanto houver ferramenta escolhida ou aproximação aplicada.
- */
-function firmarBarra(barra) {
-  barra.el.classList.toggle(
-    'fixa',
-    ferramenta !== 'mover' || barra.alvo.zoomAtual() > 1 || esconderTracos,
-  );
-}
-
 function mostrarZoom() {
   for (const barra of barras) mostrarZoomEm(barra);
 }
@@ -2583,7 +2584,6 @@ function mostrarZoomEm(barra) {
   const z = barra.alvo.zoomAtual();
   barra.nivel.textContent = `${Math.round(z * 100)}%`;
   barra.nivel.classList.toggle('ativo', z > 1);
-  firmarBarra(barra);
 }
 
 const ICONES = {
@@ -4756,41 +4756,6 @@ function openRoomSettings() {
 $('roomSettings').addEventListener('click', openRoomSettings);
 
 // ----------------------------------------------------------------- painel
-
-/**
- * As barras somem com o cursor parado e voltam ao primeiro movimento. Valem
- * dentro da sala inteira, transmitindo ou não — flutuando, elas cobrem o que
- * está embaixo nos dois casos.
- *
- * O relógio corre sempre: um `if` aqui pagaria uma consulta ao estado a cada
- * movimento do mouse para poupar um setTimeout, e quem decide se a classe pinta
- * alguma coisa já é o CSS.
- *
- * Cursor que sai da janela recolhe na hora, sem esperar o relógio: não há mais
- * movimento nenhum para vir, então o tempo de espera só adiaria o inevitável.
- */
-const OCIO = 3000;
-let ocioso = null;
-
-function acordarBarras() {
-  $('app').classList.remove('ocioso');
-  clearTimeout(ocioso);
-  ocioso = setTimeout(() => $('app').classList.add('ocioso'), OCIO);
-}
-
-function recolherBarras() {
-  clearTimeout(ocioso);
-  $('app').classList.add('ocioso');
-}
-
-// pointerdown junto com o movimento: em tela sensível ao toque não há mousemove
-// nenhum, e sem isto as barras sumiriam para sempre no primeiro silêncio.
-window.addEventListener('mousemove', acordarBarras);
-window.addEventListener('pointerdown', acordarBarras);
-// No document, e não na window: o mouseleave da window não dispara ao sair pela
-// borda em todos os navegadores.
-document.addEventListener('mouseleave', recolherBarras);
-acordarBarras();
 
 // O estado visual do botão é decidido por renderGrid, que é quem sabe se há
 // tela no palco — aqui só se troca a intenção.

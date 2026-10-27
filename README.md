@@ -287,9 +287,9 @@ nem o conteúdo de tela nenhuma.
 
 Com mais de uma transmissão no ar, uma fica em destaque no palco e as outras
 aparecem em miniatura na lateral. Para comparar duas ao mesmo tempo, clique no
-botão de **duas colunas** no canto da miniatura (**"Ver lado a lado"**): ela vai
-para o palco, dividindo o espaço com a que já estava lá. Passando o mouse sobre
-a tela em destaque aparece o mesmo botão — **"Ver lado a lado com …"** —, que
+botão de **duas colunas** ao lado do nome da miniatura (**"Ver lado a lado"**):
+ela vai para o palco, dividindo o espaço com a que já estava lá. A faixa acima
+da tela em destaque tem o mesmo botão — **"Ver lado a lado com …"** —, que
 chama a outra transmissão sem precisar da lateral (numa janela estreita a
 lateral some, e ele continua lá).
 
@@ -308,12 +308,13 @@ lateral some, e ele continua lá).
 
   ![Palco dividido com a barra arrastada: a tela ocupa a maior parte, e a câmera fica com o resto](docs/palco-dividido-barra.png)
 
-- Cada tela tem a **sua** barra de ferramentas e o **seu** zoom: aproximar uma
+- Cada tela tem a **sua** faixa, com a **sua** barra de ferramentas, e o
+  **seu** zoom: aproximar uma
   não mexe na outra. O desenho e o laser vão para a tela onde você está
   desenhando, e os atalhos de teclado valem para a tela em que o mouse passou
   por último.
 - A **tela cheia** mostra as duas.
-- Para voltar a uma tela só, use o botão **"Voltar a uma tela só"** no canto da
+- Para voltar a uma tela só, use o botão **"Voltar a uma tela só"** na faixa da
   tela que você quer tirar — a outra fica sozinha no palco. Se uma das duas
   transmissões acabar, o palco volta sozinho para a que sobrou.
 - Uma tela que você ainda não estava assistindo passa a ser assistida quando
@@ -327,8 +328,8 @@ Nada divide sozinho: o palco só mostra duas telas quando você pede.
 
 ## Apontar, desenhar e dar zoom na tela
 
-Quem assiste não fica só olhando. Passando o mouse sobre a tela em destaque
-aparece uma barrinha no alto, com o que dá para fazer:
+Quem assiste não fica só olhando. Cada tela tem uma faixa logo acima dela, com
+o nome de quem transmite, quem está assistindo e, no meio, o que dá para fazer:
 
 | Ferramenta   | Atalho | O que faz                                                                                              |
 | ------------ | ------ | ------------------------------------------------------------------------------------------------------ |
@@ -393,8 +394,13 @@ Quem chega no meio encontra o que já está desenhado. Quem está mostrando a te
 e quem criou a sala, ganham um botão a mais na barra: **limpar os desenhos de
 todo mundo**. Trocar a tela compartilhada também limpa.
 
-> Numa janela bem estreita a barra encolhe e a paleta de cores sai de cena — a
-> cor que estava escolhida continua valendo.
+> Numa janela bem estreita a barra encolhe, desce para uma linha só dela e a
+> paleta de cores sai de cena — a cor que estava escolhida continua valendo.
+
+Nenhum botão fica por cima da imagem: as barras da sala, a faixa de cada tela e
+a barra do quadro branco têm espaço próprio, e a tela se ajusta ao que sobra —
+na tela cheia, no lado a lado e na atividade estreita do Discord também. Por
+cima dela só ficam os desenhos, o laser e o aviso de quando a imagem não chega.
 
 ---
 
