@@ -86,8 +86,8 @@ exige, e o seletor também; o resto não existe. Escolheu, está no ar.
 - **Sem prévia no caminho.** Quem quer conferir antes usa a seta ao lado de
   "Escolher tela e transmitir".
 - **Escolheu errado?** **Trocar tela** abre o seletor de novo e troca a imagem
-  sem derrubar quem está assistindo. No site, o mesmo botão aparece na barra de
-  baixo enquanto a tela está no ar.
+  sem derrubar quem está assistindo. No site, o mesmo botão aparece no trilho
+  de controles enquanto a tela está no ar.
 - **A câmera vai direto ao ar**, com a webcam e o fundo da última vez.
 - Qualidade e quadros ficam lembrados no navegador; o som é a caixa
   "Compartilhar o áudio" do próprio seletor.
@@ -288,10 +288,10 @@ nem o conteúdo de tela nenhuma.
 Com mais de uma transmissão no ar, uma fica em destaque no palco e as outras
 aparecem em miniatura na lateral. Para comparar duas ao mesmo tempo, clique no
 botão de **duas colunas** ao lado do nome da miniatura (**"Ver lado a lado"**):
-ela vai para o palco, dividindo o espaço com a que já estava lá. A faixa acima
-da tela em destaque tem o mesmo botão — **"Ver lado a lado com …"** —, que
-chama a outra transmissão sem precisar da lateral (numa janela estreita a
-lateral some, e ele continua lá).
+ela vai para o palco, dividindo o espaço com a que já estava lá. O trilho de
+controles, ao lado da tela em destaque, tem o mesmo botão — **"Ver lado a lado
+com …"** —, que chama a outra transmissão sem precisar da lateral (numa janela
+estreita a lateral some, e ele continua lá).
 
 - Numa janela larga as duas ficam **lado a lado**; quando o palco é mais alto do
   que largo (a atividade aberta numa faixa estreita, por exemplo), ficam **uma
@@ -306,7 +306,7 @@ lateral some, e ele continua lá).
   neste navegador e vale para as próximas vezes, sem mudar nada para quem mais
   está assistindo.
 
-  ![Palco dividido com a barra arrastada: uma tela ocupa a maior parte e a outra fica com o resto, cada uma com a sua faixa de nome, ferramentas e botões acima da imagem](docs/palco-dividido-barra.png)
+  ![Palco dividido com a barra arrastada: uma tela ocupa a maior parte e a outra fica com o resto, cada uma com a sua faixa de nome, ferramentas e botões acima da imagem, e os controles da sala no trilho de ícones à direita](docs/palco-dividido-barra.png)
 
 - Cada tela tem a **sua** faixa, com a **sua** barra de ferramentas, e o
   **seu** zoom: aproximar uma
@@ -328,8 +328,10 @@ Nada divide sozinho: o palco só mostra duas telas quando você pede.
 
 ## Apontar, desenhar e dar zoom na tela
 
-Quem assiste não fica só olhando. Cada tela tem uma faixa logo acima dela, com
-o nome de quem transmite, quem está assistindo e, no meio, o que dá para fazer:
+Quem assiste não fica só olhando. Ao lado da tela, no trilho de controles, ficam
+a foto de quem transmite (o nome aparece ao passar o mouse), quem está
+assistindo e o que dá para fazer — no palco dividido, cada tela tem isso numa
+faixa logo acima dela:
 
 | Ferramenta   | Atalho | O que faz                                                                                              |
 | ------------ | ------ | ------------------------------------------------------------------------------------------------------ |
@@ -394,19 +396,40 @@ Quem chega no meio encontra o que já está desenhado. Quem está mostrando a te
 e quem criou a sala, ganham um botão a mais na barra: **limpar os desenhos de
 todo mundo**. Trocar a tela compartilhada também limpa.
 
-> Numa janela bem estreita a barra encolhe, desce para uma linha só dela e a
-> paleta de cores sai de cena — a cor que estava escolhida continua valendo.
+> Numa janela bem estreita a barra encolhe e a paleta de cores sai de cena — a
+> cor que estava escolhida continua valendo.
 
-Nenhum botão fica por cima da imagem: as barras da sala, a faixa de cada tela e
-a barra do quadro branco têm espaço próprio, e a tela se ajusta ao que sobra —
-na tela cheia, no lado a lado e na atividade estreita do Discord também. Por
-cima dela só ficam os desenhos, o laser e o aviso de quando a imagem não chega.
+### Onde ficam os botões
+
+Nenhum botão fica por cima da imagem, e a imagem não perde altura para eles.
+Todos os controles da sala — pessoas, compartilhar, câmera, quadro, volume,
+tela cheia, sair — e os da tela em destaque moram num **trilho de ícones** na
+lateral direita, encostado na lista de telas e pessoas. Cada ícone diz o que faz
+ao passar o mouse.
+
+- Tela compartilhada é mais larga que alta, e a sobra que ela deixa na janela é
+  dos lados: é lá que o trilho mora. Com a lateral aberta ele sai da largura
+  dela, e a tela fica do tamanho que tinha quando os botões flutuavam por cima.
+- Onde a sobra é **em cima e embaixo** — a atividade estreita do Discord, um
+  monitor em pé —, o trilho deita numa linha embaixo da tela. Quem decide é a
+  forma da área contra a da imagem, não só o tamanho da janela.
+- O que não cabe na altura vai para o botão **⋮ (mais)**, com o nome ao lado de
+  cada ícone. Sai primeiro o que menos se usa; compartilhar, apontar, desenhar,
+  tela cheia e sair ficam sempre à vista.
+- Vale igual na **tela cheia** e no **quadro branco**. Numa janela exatamente
+  16:9 em tela cheia o trilho custa à imagem a largura dele (uns 3%) — ali não
+  sobra nada dos lados nem em cima.
+
+Por cima da imagem só ficam os desenhos, o laser e o aviso de quando ela não
+chega.
+
+![O tamanho da imagem antes do #6 (botões flutuando por cima), depois dele (faixas em cima e embaixo) e com o trilho na lateral](docs/trilho-antes-depois.png)
 
 ---
 
 ## Quadro branco
 
-O botão do quadrinho na barra de baixo — ou a tecla **Q** — troca as telas por
+O botão do quadrinho no trilho de controles — ou a tecla **Q** — troca as telas por
 uma folha em branco. Todo mundo na sala desenha nela ao mesmo tempo, com as
 mesmas ferramentas da tela: caneta, laser, cores, espessura, desfazer.
 
@@ -450,8 +473,8 @@ sendo a tela inteira, e o som passa a vir da aba que você escolher — que é a
 Serve para YouTube, Twitch, jogo de navegador. Para um jogo instalado, cujo som
 não está em aba nenhuma, não tem como — nem aqui nem em qualquer outro site.
 
-Quem assiste passa o mouse no alto-falante da barra de baixo para ajustar o
-volume, ou clica nele para silenciar.
+Quem assiste passa o mouse no alto-falante do trilho de controles para ajustar
+o volume, ou clica nele para silenciar.
 
 > Som funciona no Chrome, Edge, Brave e Opera.
 
@@ -459,7 +482,8 @@ volume, ou clica nele para silenciar.
 
 ## Câmera: fundo e GIF
 
-A câmera tem botão próprio na barra de baixo, ao lado do de compartilhar tela.
+A câmera tem botão próprio no trilho de controles, logo abaixo do de
+compartilhar tela.
 Ela abre na mesma aba de transmissão e vai direto ao ar, com a webcam e o fundo
 da última vez. É lá que ficam os dois ajustes abaixo — os dois valem **na
 hora**, com a câmera já no ar, sem derrubar quem assiste, e ficam lembrados para
@@ -531,7 +555,7 @@ O Node.js não foi instalado, ou a janela preta foi aberta antes da instalação
 Feche a janela, abra de novo e tente outra vez.
 
 **Não sai som**
-Abra o botão ⓘ na barra de baixo e olhe a linha **Som**. Ela diz em qual dos
+Aperte **Ctrl+Shift+D** para abrir o diagnóstico e olhe a linha **Som**. Ela diz em qual dos
 casos você está: sem áudio na transmissão, esperando o áudio, silenciado aí, ou
 tocando.
 
